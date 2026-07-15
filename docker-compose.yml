@@ -1,0 +1,72 @@
+#version: '3.8'
+
+services:
+
+  postgres:
+    image: pgvector/pgvector:pg17  # или pg16/pg15 #postgres:latest  # 18.3
+    container_name: jumis_postgres
+    environment:
+      POSTGRES_USER: ${USER_DB}
+      POSTGRES_PASSWORD: ${PASSWORD_DB}
+      POSTGRES_DB: ${POSTGRES_DB}
+      TZ: Europe/Moscow
+    # Меняем 5432 хоста на 15433, чтобы не конфликтовать с локальной БД
+    ports:
+      - "127.0.0.1:15433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - /etc/localtime:/etc/localtime:ro
+    networks:
+      - db-network
+
+
+  # bot-jumis:
+  #     build:
+  #       context: .
+  #       dockerfile: Dockerfile.jumis
+  #       network: host # <-- интернет появится при apt-get даже с VPN
+  #     container_name: bot_jumis
+  #     env_file:
+  #       - .env
+  #       - .env.mtproxy
+  #       - .env.socks5proxy
+  #     environment:
+  #       TZ: Europe/Moscow
+  #     depends_on:
+  #       - postgres
+  #     network_mode: "host" # <-- Работа контейнера через VPN хоста
+  #     # Переписываем DNS на публичные гугловские/клаудфлейр, а затем запускаем скрипт
+  #     # Проблема DNS-петли
+  #     command: >
+  #       sh -c "echo 'nameserver 8.8.8.8' > /etc/resolv.conf && 
+  #             echo 'nameserver 1.1.1.1' >> /etc/resolv.conf && 
+  #             python jumis/run_bot.py"
+
+  #     # Сюда будут складываться все модели (Kairos, Torch, HF), они останутся на ПК
+  #     volumes:
+  #       - ./models_cache:/root/.cache
+  #       # Монтируем ВСЮ текущую папку проекта в /jumis контейнера, что бы session_jumis.session и models_cache менялся в обоих направлениях
+  #       - .:/jumis
+  #       - /etc/localtime:/etc/localtime:ro
+      
+  #     # Маппинг портов ниже будет проигнорирован докером из-за host-мода.
+  #     # Приложение займет тот порт на ПК, на котором запустится в Python.
+  #     # ports:
+  #     #   - "28080:80"  
+
+  #     # --- ЭТОТ БЛОК ОТКРЫВАЕТ ДОСТУП К ВИДЕОКАРТЕ ---
+  #     deploy:
+  #       resources:
+  #         reservations:
+  #           devices:
+  #             - driver: nvidia
+  #               count: all # или 1, если одна карта
+  #               capabilities: [gpu]
+
+volumes:
+  postgres_data:
+    driver: local
+
+networks:
+  db-network:
+    driver: bridge

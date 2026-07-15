@@ -1,0 +1,37 @@
+FROM python:3.12-slim
+
+ENV PYTHONUNBUFFERED=1
+
+# Рабочая директория
+WORKDIR /jumis
+
+# 1. Системные пакеты (исправлено под Ubuntu 24.04)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    postgresql-client \
+    ffmpeg \
+    libsndfile1 \
+    libsm6 \
+    libxext6 \
+    libgl1 \
+    libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+
+# 2. Кэшируем основные зависимости из requirements.txt
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
+
+# 3. Ставим специфичные тяжелые библиотеки (+ soundfile)
+RUN pip install --no-cache-dir aiohttp-socks --no-deps && \
+    pip install --no-cache-dir \
+    telethon \
+    pysocks \
+    Pillow \
+    ultralytics \
+    soundfile \
+    kairos-asr[gpu]
+
+# 4. Копируем исходный код
+COPY ./jumis/ ./jumis/
+
+# Запуск скрипта 
+CMD ["python", "jumis/run_bot.py"]

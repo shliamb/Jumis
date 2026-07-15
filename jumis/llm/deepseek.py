@@ -1,0 +1,701 @@
+#! master/llm/deepseek.py
+# pip install openai
+import asyncio
+import httpx
+import inspect
+from typing import AsyncGenerator, AsyncIterator
+from openai import AsyncOpenAI, APITimeoutError, APIConnectionError, RateLimitError, APIError
+from llm.agents import AGENTS
+from llm.functions import FUNCTIONS
+# from functools import lru_cache
+from llm.queue_keys import create_key_queue
+from config import MODEL_DS, TIMEOUT, HISTORY_LIMIT, USE_MEM
+# from database.memories import load_memories
+import json
+
+
+
+
+class DeepSeek:
+    def __init__(self):
+        ''' Инициализация DeepSeek и его настроек.
+            Если заблокируют и его, то нужно будет отдельно использовать 
+            http прокси.
+        '''
+        self.key_queue = create_key_queue() # Создаем Очередь ключей
+        self.http_client = httpx.AsyncClient(proxy=None) # Создаём ОДИН общий клиент и # явно отключаем прокси
+        self.dialog = []
+        self.memories = []
+        self.use_mem = USE_MEM
+        self.model = MODEL_DS
+        self.timeout = TIMEOUT
+        self.history_limit = HISTORY_LIMIT
+        self.functions = FUNCTIONS
+        self.agents = AGENTS
+        self.tool_choice = "auto"
+        # self.max_tokens = 1000
+        # self.temperature = 0.7
+
+
+    @staticmethod
+    async def _error_net(text_err):
+        """Заглушка для ошибок сети. Возвращает объект в формате ответа API, 
+        чтобы основной код не сломался. Внутри будет текст ошибки вместо ответа модели."""
+
+        from types import SimpleNamespace
+        return SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(
+                        content=text_err
+                    )
+                )
+            ]
+        )
+
+
+    # async def load_memories(self):
+    #     """ Выгрузка воспоминаний из базы """
+    #     try:
+    #         memories_list = await load_memories()
+    #         if memories_list:
+    #             return "\n".join(memories_list)
+            
+    #     except Exception as e:
+    #         print(f"Ошибка загрузки памяти: {e}")
+    #         self.memories = []
+        
+
+
+    async def get_tools_for_agent(self, function_names: list) -> list:
+        """ Формирует tools из FUNCTIONS в functions.py"""
+        tools = []
+        for func_name in function_names:
+            if func_name in self.functions:
+                func_info = self.functions[func_name]
+                tools.append({
+                    "type": "function",
+                    "function": {
+                        "name": func_name,
+                        "description": func_info["description"],
+                        "parameters": func_info["schema"]
+                    }
+                })
+        return tools
+    
+
+    async def call_function(self, func_name, arguments):
+        """Вызывает зарегистрированную функцию с переданными аргументами.
+        Автоматически передаёт ds, если функция их ожидает.
+        Поддерживает два формата регистрации:
+            - прямая функция (callable)
+            - словарь с ключом 'function' (для сложных случаев с описанием)
+        """
+        entry = self.functions.get(func_name)
+        if entry is None:
+            return {"error": f"Function '{func_name}' not found"}
+
+        # Определяем вызываемый объект
+        if callable(entry):
+            func = entry
+        elif isinstance(entry, dict) and 'function' in entry:
+            func = entry['function']
+        else:
+            return {"error": f"Invalid registration for function '{func_name}': {type(entry)}"}
+
+        try:
+            sig = inspect.signature(func)
+            call_kwargs = dict(arguments)  # копируем аргументы
+
+            # Автоматически добавляем ds, если функция его принимает
+            if 'ds' in sig.parameters:
+                call_kwargs['ds'] = self
+
+            # Вызов в зависимости от типа функции
+            if inspect.iscoroutinefunction(func):
+                return await func(**call_kwargs)
+            else:
+                return func(**call_kwargs)
+
+        except Exception as e:
+            return {"error": f"Function '{func_name}' failed: {str(e)}"}
+
+
+
+    async def get_tools(self, agent: str = "general_agent") -> tuple:
+            """ Получает системный промпт и tools для указанного агента. """
+            try:
+                # Берем локальную копию промпта, чтобы случайно не испортить оригинал
+                system = self.agents[agent]["system"]
+                function_names = self.agents[agent]["tools"]
+                tools = await self.get_tools_for_agent(function_names)
+                #print(json.dumps(tools, indent=2, ensure_ascii=False))
+                
+                if not self.use_mem:
+                    return system, tools
+                
+                # Намертво изолируем воспоминания только для главного агента
+                if agent == "general_agent":
+                    memories = await self.load_memories()
+                    if memories:
+                        system = f"{system.rstrip()}\n\n**Важные воспоминания агента:**\n{memories}"
+                        
+                return system, tools
+            
+            except KeyError as e:
+                raise KeyError(f"Агент '{agent}' не найден. Доступные агенты: {list(self.agents.keys())}") from e
+
+
+
+    async def get_agent_info(self, agent: str) -> dict:
+        """Полная информация об агенте (опционально)"""
+        agent_config = self.agents[agent].copy()  # Копируем, чтобы не менять оригинал
+        agent_config["tools_for_api"] = await self.get_tools_for_agent(agent_config["function"])
+        return agent_config
+
+
+
+
+    async def _call_request(
+            self,
+            system: str,
+            question: str = None,
+            stream: bool = True,
+            tools: dict = None,
+            dialog: list = None,
+            response_format: dict = None
+        ):
+        """
+        Чистый вызов API DeepSeek с автоматическим бесконечным ожиданием 
+        восстановления сети при сбоях.
+        """
+        # 1. Сборка сообщений — чистая синхронная логика, скрывать в try-except не нужно
+        messages = [{"role": "system", "content": system}]
+        if dialog is not None:
+            messages.extend(dialog)
+        elif self.dialog:
+            messages.extend(self.dialog)
+
+        # Для Stateless (одноразовых) запросов
+        if question:
+            messages.append({"role": "user", "content": question})
+
+        print("\ndialog:", json.dumps(messages, indent=2, ensure_ascii=False, default=str))
+        print("Waiting for free DeepSeek API key...")
+
+        # 2. Берем ключ из очереди ДО цикла ретраев. 
+        # Удерживаем его, пока идет процесс попыток соединения, чтобы не плодить хаос в очереди.
+        free_key_ds = await self.key_queue.get()
+        print(f"Got key ending with ...{free_key_ds[-4:]}")
+
+        retry_delay = 5  # Стартовая задержка при потере интернета
+        max_delay = 60   # Максимальная задержка, чтобы не спамить слишком часто
+
+        try:
+            http_client_safe = getattr(self, "http_client", None)
+            client = AsyncOpenAI(
+                api_key=free_key_ds,
+                base_url="https://api.deepseek.com",
+                http_client=http_client_safe,
+            )
+
+            # Тот самый ТОЧЕЧНЫЙ цикл ретраев для сетевых операций
+            while True:
+                try:
+                    response = await client.chat.completions.create(
+                        model=self.model,
+                        messages=messages,
+                        tools=tools,
+                        response_format=response_format,
+                        stream=stream,
+                        timeout=self.timeout,
+                        tool_choice=self.tool_choice
+                    )
+                    # Если дошли сюда — коннект успешный, выходим из цикла ретраев
+                    break
+
+                except (APIConnectionError, APITimeoutError) as net_err:
+                    # Сюда прилетают: нет интернета, упал DNS (Temporary failure in name resolution), таймаут сервера
+                    print(f"[СЕТЕВОЙ СБОЙ] Интернет отсутствует или сервер DeepSeek лежит: {net_err}")
+                    print(f"Ждем {retry_delay} сек. до следующей попытки реквеста...")
+                    
+                    await asyncio.sleep(retry_delay)
+                    retry_delay = min(retry_delay * 2, max_delay)  # Увеличиваем шаг ожидания
+                    continue  # Уходим на следующий круг while True
+
+                except RateLimitError:
+                    # Поймали 429 ошибку (закончились деньги на ключе или слишком много запросов в секунду)
+                    print("[RATE LIMIT] Превышены лимиты частоты запросов. Ждем 15 секунд...")
+                    await asyncio.sleep(15)
+                    continue
+
+                except APIError as e:
+                    # Фатальные ошибки самого API (например, неверные параметры, дохлый/забаненный ключ)
+                    # Ретраить их бесконечно нет смысла — они не починятся при появлении интернета
+                    print(f"[ФАТАЛЬНАЯ ОШИБКА API] {e.__class__.__name__}: {str(e)}")
+                    # Пробрасываем ошибку выше, чтобы её обработал вызывающий воркер (или заменил ключ)
+                    raise e
+                
+                except Exception as unexpected_error:
+                    # ВЫЯВЛЕНИЕ «НЛО» (баги кода, косяки типов данных, внутренние ошибки библиотеки)
+                    print(f"💥 КРИТИЧЕСКИЙ И НЕПРЕДВИДЕННЫЙ СБОЙ: {unexpected_error.__class__.__name__}: {unexpected_error}")
+                    # Срочно выходим из цикла! Ретраить это бесконечно бессмысленно.
+                    raise unexpected_error
+
+            # 3. Обработка успешного ответа
+            if stream:
+                async def stream_wrapper(api_stream, key):
+                    try:
+                        async for chunk in api_stream:
+                            yield chunk
+                    except (APIConnectionError, APITimeoutError) as stream_net_err:
+                        # Обработка обрыва связи ПОСЕРЕДИНЕ скачивания чанков текста
+                        print(f"[ОБРЫВ СТРИМА] Интернет пропал во время получения чанков: {stream_net_err}")
+                    finally:
+                        # Ключ вернётся в очередь СТРОГО после закрытия или падения стрима
+                        self.key_queue.put_nowait(key)
+                        print(f"Stream finished. Key ...{key[-4:]} returned to queue.")
+
+                key_to_release = free_key_ds
+                free_key_ds = None  # Зануляем, чтобы внешний `finally` не вернул ключ раньше времени
+                return stream_wrapper(response, key_to_release)
+            
+            # Если запрос обычный (stream=False) — просто отдаем response. 
+            # Внешний `finally` ниже сам вернет ключ в очередь сразу после этого return.
+            return response
+
+        finally:
+            # Этот блок гарантированно сработает в двух случаях:
+            # 1. При stream=False (когда запрос прошел успешно)
+            # 2. Если внутри цикла вылетела фатальная APIError (чтобы ключ не улетел в никуда)
+            if free_key_ds is not None:
+                self.key_queue.put_nowait(free_key_ds)
+                print(f"Simple call finished. Key ...{free_key_ds[-4:]} returned to queue.")
+
+
+
+    # async def _call_request(
+    #         self,
+    #         system: str,
+    #         question: str = None,
+    #         stream: bool = True,
+    #         tools: dict = None,
+    #         dialog: list = None,
+    #         response_format: dict = None
+    #     ):
+    #     """
+    #     Чистый вызов API DeepSeek с получением ключа из общей очереди.
+    #     Возвращает ответ API или пробрасывает исключение при ошибке.
+    #     """
+    #     free_key_ds = None
+    #     try:
+    #         # Формируем messages
+    #         messages = [{"role": "system", "content": system}]
+
+    #         if dialog is not None:
+    #             messages.extend(dialog)          # передали явно, даже если пустой список
+    #         elif self.dialog:
+    #             messages.extend(self.dialog)     # не передали — берём self.dialog
+            
+    #         if question:
+    #             messages.append({"role": "user", "content": question}) # текущий вопрос user
+
+
+    #         print("\ndialog:", json.dumps(messages, indent=2, ensure_ascii=False, default=str))
+    #         print("Waiting for free DeepSeek API key...")
+
+    #         free_key_ds = await self.key_queue.get()
+    #         print(f"Got key ending with ...{free_key_ds[-4:]}")
+
+
+    #         client = AsyncOpenAI(
+    #             api_key=free_key_ds,
+    #             base_url="https://api.deepseek.com",
+    #             http_client=self.http_client
+    #         )
+
+    #         response = await client.chat.completions.create(
+    #             model=self.model,
+    #             messages=messages,
+    #             tools=tools,
+    #             response_format=response_format,
+    #             stream=stream,
+    #             timeout=self.timeout,
+    #             tool_choice=self.tool_choice
+    #         )
+
+    #         # Если это стрим, оборачиваем его в безопасный генератор
+    #         if stream:
+    #             async def stream_wrapper(api_stream, key):
+    #                 try:
+    #                     async for chunk in api_stream:
+    #                         yield chunk
+    #                 finally:
+    #                     # Ключ вернётся в очередь СТРОГО после закрытия или прочтения стрима
+    #                     self.key_queue.put_nowait(key)
+    #                     print(f"Stream finished. Key ...{key[-4:]} returned to queue.")
+
+    #             key_to_release = free_key_ds
+    #             free_key_ds = None # Зануляем, чтобы нижний finally не вернул его раньше времени
+    #             return stream_wrapper(response, key_to_release)
+            
+    #         # Если запрос обычный (не стрим) — просто отдаем ответ, finally внизу сам вернет ключ
+    #         return response
+        
+    #     except APITimeoutError:
+    #         return await self._error_net("Сервер DeepSeek отвечает слишком долго.")
+    #     except APIConnectionError:
+    #         return await self._error_net("Проблемы с интернет-соединением.")
+    #     except RateLimitError:
+    #         return await self._error_net("Превышен лимит запросов к DeepSeek.")
+    #     except APIError as e:
+    #         print(f"[DEEPSEEK ERROR] {e.__class__.__name__}: {str(e)}")
+    #         return await self._error_net(f"Ошибка DeepSeek API: {e.status_code}")
+    #     finally:
+    #         # Сработает сразу только для обычных запросов (stream=False)
+    #         if free_key_ds is not None:
+    #             self.key_queue.put_nowait(free_key_ds)
+    #             print(f"Simple call finished. Key ...{free_key_ds[-4:]} returned to queue.")
+
+
+
+
+    async def add_tool_response(self, tool_call_id: str, content: str) -> None:
+        """ Добавить ответ функции в историю диалога """
+        self.dialog.append({
+            "role": "tool",
+            "tool_call_id": tool_call_id,
+            "content": content
+        })
+        # БЕЗ обрезки здесь — trim вызывается явно после добавления всего блока
+
+
+    async def add_assistant_message(self, content: str = "", tool_calls: list = None):
+        """ Добавляет сообщение ассистента в диалог. tool_calls — список в формате API """
+        msg = {"role": "assistant"}
+        if content:
+            msg["content"] = content
+        if tool_calls:
+            msg["tool_calls"] = tool_calls
+        self.dialog.append(msg)
+        # Обрезаем только если это assistant БЕЗ tool_calls (финальный ответ)
+        if not tool_calls:
+            self._safe_trim()
+
+
+
+    async def add_user_message(self, content: str):
+        """ Добавление в диалог только сообщение/вопрос пользователя """
+        self.dialog.append({"role": "user", "content": content})
+
+
+
+    def _safe_trim(self):
+        """Обрезает диалог до history_limit, не разрывая пары assistant(tool_calls) ↔ tool."""
+        if len(self.dialog) <= self.history_limit:
+            print("\ntrim: NO\n")
+            return
+        # Сдвигаем точку обрезки вправо, пока не окажемся в безопасной позиции
+        cut = len(self.dialog) - self.history_limit
+        while cut < len(self.dialog):
+            msg = self.dialog[cut]
+            # Нельзя начинать с tool
+            if msg.get('role') == 'tool':
+                cut += 1
+                continue
+            # Нельзя начинать с assistant, у которого есть tool_calls (если за ним не идут все соответствующие tool)
+            if msg.get('role') == 'assistant' and msg.get('tool_calls'):
+                # Проверяем, что все tool-ответы на месте
+                expected_ids = {tc['id'] for tc in msg['tool_calls']}
+                found_ids = set()
+                for m in self.dialog[cut+1:]:
+                    if m.get('role') == 'tool':
+                        if m.get('tool_call_id') in expected_ids:
+                            found_ids.add(m['tool_call_id'])
+                    else:
+                        break
+                if found_ids != expected_ids:
+                    cut += 1
+                    continue
+            break
+        print("\ntrim: YES\n")
+        self.dialog = self.dialog[cut:]
+
+
+
+    async def _clear_dialog(self) -> None:
+        """ Очистка диалога """
+        self.dialog = []
+
+
+
+    async def simple_call(
+            self,
+            system: str,
+            dialog: list = None,
+            question: str = None
+        ) -> dict:
+        """
+        Простой запрос к LLM без вызова функций.
+        Возвращает словарь с текстом и usage.
+        Диалог свой личный!
+        """
+        
+        if dialog is None:
+            dialog = []
+
+        if not system:
+            raise ValueError("System content is required")
+
+        response = await self._call_request(
+            system=system,
+            question=question,
+            dialog=dialog,
+            stream=False
+        )
+
+        message = response.choices[0].message
+        usage = response.usage
+
+        result = {
+            'type': 'text',
+            'content': message.content or '',
+        }
+
+        if usage:
+            result['usage'] = {
+                'completion_tokens': usage.completion_tokens,
+                'prompt_tokens': usage.prompt_tokens,
+                'total_tokens': usage.total_tokens,
+                'cached_tokens': getattr(
+                    usage.prompt_tokens_details, 'cached_tokens', 0
+                ) if usage.prompt_tokens_details else 0
+            }
+
+        return result
+
+
+
+    async def refine_stream(
+            self,
+            system: str,
+            question: str = None,
+        ) -> AsyncIterator[dict]:
+        """
+            Простой стрим ответ от LLM без вызова функций и АВТО СОХРАНЕНИЕ ДИАЛОГА
+            Stream ответ от DeepSeek + usage:
+            - {'type': 'text', 'content': '...'} - текст для stream вывода
+            - {'type': 'usage', 'data': {...}} - статистика (в конце)
+        """
+
+        if not system:
+            print("Error: where is System content?")
+            return
+
+        collected_content = ""
+        answer = ""
+
+        stream = await self._call_request(
+                system=system,
+                question=question,
+                stream=True
+            )
+        async for chunk in stream:
+            delta = chunk.choices[0].delta
+            
+            # 1. Текстовый ответ stream
+            if delta.content:
+                collected_content += delta.content
+                yield {'type': 'text', 'content': delta.content}
+
+        # 2. Usage данные (из последнего chunk)
+        if hasattr(chunk, 'usage') and chunk.usage:
+            yield {
+                'type': 'usage',
+                'data': {
+                    'completion_tokens': chunk.usage.completion_tokens,
+                    'prompt_tokens': chunk.usage.prompt_tokens,
+                    'total_tokens': chunk.usage.total_tokens,
+                    'cached_tokens': getattr(chunk.usage.prompt_tokens_details, 'cached_tokens', 0)
+                }
+            }
+
+        ########### Сохранение диалога  #############
+        answer += collected_content
+        await self._add_dialog(question=question, answer=answer)
+
+
+
+    async def refine_stream_tools(
+            self,
+            system: str,
+            question: str = None,
+            tools: dict = None,
+        ) -> AsyncIterator[dict]:
+        """
+            Запрос к LLM с фызовом функций и выводом стрима БЕЗ СОХРАНЕНИЯ ДИАЛОГА (в ручную для контроля)
+            Stream ответ от DeepSeek + tools + usage:
+            - {'type': 'text', 'content': '...'} - текст для stream вывода
+            - {'type': 'tool', 'data': {...}} - данные о вызове функции (после завершения)
+            - {'type': 'usage', 'data': {...}} - статистика (в конце)
+        """
+
+        collected_content = ""
+        tool_calls_buffer = {}
+        current_tool_id = None
+
+        try:
+            stream = await self._call_request(
+                system=system,
+                question=question,
+                tools=tools,
+                stream=True
+            )
+            if not hasattr(stream, '__aiter__'):
+                yield {'type': 'error', 'content': f"Ошибка API: неожиданный ответ {type(stream)}"}
+                return
+        except Exception as e:
+            yield {'type': 'error', 'content': f"Ошибка API: {e}"}
+            return
+
+        async for chunk in stream:
+            delta = chunk.choices[0].delta
+            
+            # 1. Текстовый ответ stream
+            if delta.content:
+                collected_content += delta.content
+                yield {'type': 'text', 'content': delta.content}
+
+            # 2. Функции - накапливаем, отдаем в конце
+            if delta.tool_calls:
+                for tool_call in delta.tool_calls:
+                    if tool_call.id:
+                        # Новый вызов функции
+                        current_tool_id = tool_call.id
+                        tool_calls_buffer[current_tool_id] = {
+                            "name": tool_call.function.name or "",
+                            "arguments": tool_call.function.arguments or "",
+                            'id': tool_call.id
+                        }
+                    elif tool_call.function:
+                        # Продолжение аргументов
+                        if tool_call.function.name:
+                            tool_calls_buffer[current_tool_id]["name"] += tool_call.function.name
+                        if tool_call.function.arguments:
+                            tool_calls_buffer[current_tool_id]["arguments"] += tool_call.function.arguments
+
+
+        # 3. Usage данные (из последнего chunk)
+        if hasattr(chunk, 'usage') and chunk.usage:
+            yield {
+                'type': 'usage',
+                'data': {
+                    'completion_tokens': chunk.usage.completion_tokens,
+                    'prompt_tokens': chunk.usage.prompt_tokens,
+                    'total_tokens': chunk.usage.total_tokens,
+                    'cached_tokens': getattr(chunk.usage.prompt_tokens_details, 'cached_tokens', 0)
+                }
+            }
+
+        # 4. Вызовы функций (отдаем разом после стрима)
+        tool_calls_list = []   # инициализируем здесь
+
+        if tool_calls_buffer:
+            # Преобразуем буфер в список tool_calls в формате API
+            for tool_id, tc in tool_calls_buffer.items():
+                tool_calls_list.append({
+                    "id": tool_id,
+                    "type": "function",
+                    "function": {
+                        "name": tc["name"],
+                        "arguments": tc["arguments"]
+                    }
+                })
+
+            yield {'type': 'tool', 'data': tool_calls_buffer}
+
+
+
+
+    async def call_with_tools(
+            self,
+            system: str,
+            dialog: list = None,
+            question: str = None,
+            tools: list = None,
+        ) -> dict:
+        """
+        Простой запрос к LLM с возможным вызовом функций (без стрима).
+        Возвращает словарь с результатом:
+        - {'type': 'text', 'content': '...', 'usage': {...}}
+        - {'type': 'tool_calls', 'tool_calls': [...], 'content': '...', 'usage': {...}}
+        - {'type': 'error', 'content': '...'}
+        """
+        if not system:
+            raise ValueError("System content is required")
+
+        try:
+            response = await self._call_request(
+                system=system,
+                question=question,
+                dialog=dialog,
+                tools=tools,
+                stream=False
+            )
+        except Exception as e:
+            return {'type': 'error', 'content': f"API request failed: {e}"}
+
+        if not response.choices:
+            return {'type': 'error', 'content': "Empty response from API"}
+
+        message = response.choices[0].message
+        usage = response.usage
+
+        result = {}
+
+        # Текстовый ответ
+        if message.content:
+            result['content'] = message.content
+            result['type'] = 'text'
+        else:
+            result['content'] = ''
+            result['type'] = 'text'  # запасной тип, если нет ни текста, ни tool_calls
+
+        # Вызовы инструментов
+        if message.tool_calls:
+            result['type'] = 'tool_calls'
+            result['tool_calls'] = [
+                {
+                    "id": tc.id,
+                    "type": "function",
+                    "function": {
+                        "name": tc.function.name,
+                        "arguments": tc.function.arguments
+                    }
+                }
+                for tc in message.tool_calls
+            ]
+
+        # Статистика
+        if usage:
+            result['usage'] = {
+                'completion_tokens': usage.completion_tokens,
+                'prompt_tokens': usage.prompt_tokens,
+                'total_tokens': usage.total_tokens,
+                'cached_tokens': getattr(
+                    usage.prompt_tokens_details, 'cached_tokens', 0
+                ) if usage.prompt_tokens_details else 0
+            }
+
+        return result
+
+
+
+
+
+
+
+
+
+
+

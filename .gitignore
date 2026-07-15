@@ -1,2 +1,13 @@
+__pycache__/
+*.pyc
+.env.mtproxy
+.env.socks5proxy
+.env.llm
 .env
-.venv
+.venv/
+test.py
+jumis/test.py
+session_jumis.session
+session_jumis.session-journal
+models_cache/huggingface
+models_cache/torch

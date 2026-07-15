@@ -11,16 +11,18 @@ lxml==5.3.0
 
 
 
+
+
 # pip install -r requirements.txt - чисткая установка без зависимостей
 # pip install -r requirements.txt --no-deps
 # pip install aiohttp-socks --no-deps  # без флага потянет зависимости
 # pip install telethon
 # pip install pysocks
 # sudo apt install postgresql-14-pgvector
-# pip install easyocr
-# pip install Pillow
-# pip install ultralytics
 # pip install kairos-asr[gpu]
+# sudo apt-get update
+# sudo apt-get install -y libsndfile1 ffmpeg
+# pip install soundfile
 
 
 
