@@ -5,7 +5,6 @@ import re
 import time
 from aiogram import Bot
 from aiogram.enums import ParseMode
-# from llm import ds
 from aiogram import Router, types
 from aiogram.exceptions import TelegramRetryAfter, TelegramAPIError, TelegramBadRequest
 from config import ADMIN_ID
@@ -209,7 +208,7 @@ async def rights_verification(user_id: int, lang: str, message: types.Message) -
 
 
 @router.message()
-async def handle_message(message: types.Message, bot: Bot, ds):
+async def handle_message(message: types.Message, bot: Bot, llm):
     user_id = message.from_user.id
     if not await rights_verification(user_id, message.from_user.language_code, message):
         return
@@ -276,11 +275,11 @@ async def handle_message(message: types.Message, bot: Bot, ds):
         return
         
 
-    system, tools = await ds.get_tools("general_agent")
+    system, tools = await llm.get_tools("general_agent")
     msg = await message.answer("...")
 
     # Добавляем сообщение пользователя в историю диалога
-    await ds.add_user_message(message_text)
+    await llm.add_user_message(message_text)
 
     full_text = ""          # накопленный текст за всё время (для финального сообщения)
     buffer = ""
@@ -291,7 +290,7 @@ async def handle_message(message: types.Message, bot: Bot, ds):
         has_tool_calls = False
         stream_text = ""
 
-        async for chunk in ds.refine_stream_tools(question=None, system=system, tools=tools):
+        async for chunk in llm.refine_stream_tools(question=None, system=system, tools=tools):
             if chunk['type'] == 'text':
                 stream_text += chunk['content']
                 buffer += chunk['content']
@@ -349,7 +348,7 @@ async def handle_message(message: types.Message, bot: Bot, ds):
                         "arguments": tc['arguments']
                     }
                 })
-            await ds.add_assistant_message(content=stream_text, tool_calls=tool_calls_for_msg)
+            await llm.add_assistant_message(content=stream_text, tool_calls=tool_calls_for_msg)
             full_text += stream_text + "\n"
             
             # Рендерим промежуточный статус перед вызовом тулзы
@@ -366,16 +365,16 @@ async def handle_message(message: types.Message, bot: Bot, ds):
             # Выполняем функции
             for tc in tool_calls_info:
                 args = json.loads(tc['arguments']) if isinstance(tc['arguments'], str) else tc['arguments']
-                result = await ds.call_function(tc['name'], args)
+                result = await llm.call_function(tc['name'], args)
                 result_str = json.dumps(result, ensure_ascii=False) if result is not None else "ok"
-                await ds.add_tool_response(tc['id'], result_str)
+                await llm.add_tool_response(tc['id'], result_str)
 
-            ds._safe_trim()
+            llm._safe_trim()
             continue
 
         # Нет вызовов функций — финальный ответ
         else:
-            await ds.add_assistant_message(content=stream_text)
+            await llm.add_assistant_message(content=stream_text)
             full_text += stream_text + "\n"
             
             # Финальный текст шлем обязательно, забивая на таймер

@@ -1,12 +1,34 @@
-openai==2.9.0
+# Главные рабочие инструменты
+litellm==1.93.0
 aiogram==3.26.0
-python-dotenv==1.1.1
+telethon==1.42.0
+
+# Работа с базой данных PostgreSQL
 asyncpg==0.29.0
 psycopg2-binary==2.9.9
-aiohttp==3.9.5
+
+# Окружение и сеть
+python-dotenv==1.1.1
 aiohttp-socks==0.8.4
-Telethon==1.42.0
+
+# Парсинг (если используешь напрямую в коде)
 lxml==5.3.0
+numpy==2.5.1
+
+# Звук
+cffi==2.1.0
+pycparser==3.0
+soundfile==0.14.0
+
+# В ручную:
+# uv pip install kairos-asr[gpu]
+
+
+# Везде добавляю uv
+# uv pip install -r requirements.txt
+# uv pip tree
+
+
 
 
 
@@ -20,6 +42,7 @@ lxml==5.3.0
 # pip install pysocks
 # sudo apt install postgresql-14-pgvector
 # pip install kairos-asr[gpu]
+# uv pip install kairos-asr[gpu]
 # sudo apt-get update
 # sudo apt-get install -y libsndfile1 ffmpeg
 # pip install soundfile

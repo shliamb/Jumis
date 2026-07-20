@@ -9,7 +9,7 @@ from proxy.socks5proxy import SOCKS5PROXY_STRINGS
 from bot_instance import AioBot
 from python_socks._errors import ProxyError
 from utils.serialize import serialize_for_json
-from llm.deepseek import DeepSeek
+from llm.llm_router import LLMWorker
 
 
 import logging
@@ -60,8 +60,8 @@ async def main_bot() -> None:
     await bot_instance.create_bot()
     dp.bot = bot_instance.bot
     await init_router()
-    ds = DeepSeek()
-    dp["ds"] = ds  # Теперь aiogram знает про этот объект глобально
+    llm = LLMWorker()
+    dp["llm"] = llm  # Теперь aiogram знает про этот объект глобально
     await db.connect()
     telethon_task = asyncio.create_task(mytelethon.run())
 
@@ -78,8 +78,8 @@ async def main_bot() -> None:
                 await asyncio.gather(
                     dp.start_polling(dp.bot, skip_updates=False),
                     telethon_task
-                    # messages_from_workers(ds),
-                    # resend_unconfirmed_tasks(ds)
+                    # messages_from_workers(llm),
+                    # resend_unconfirmed_tasks(llm)
                 )
 
             except (aiohttp.ClientConnectorError, aiohttp.ClientProxyConnectionError, ProxyError):

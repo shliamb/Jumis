@@ -1,34 +1,43 @@
-#! master/llm/deepseek.py
-# pip install openai
+#! jumis/llm/deepseek.py
+import os
 import asyncio
-import httpx
+import litellm
+from litellm import acompletion
+from dotenv import load_dotenv
+#import httpx
 import inspect
 from typing import AsyncGenerator, AsyncIterator
-from openai import AsyncOpenAI, APITimeoutError, APIConnectionError, RateLimitError, APIError
 from llm.agents import AGENTS
 from llm.functions import FUNCTIONS
-# from functools import lru_cache
-# from llm.queue_keys import create_key_queue
-from config import MODEL_DS, TIMEOUT, HISTORY_LIMIT, USE_MEM
+from config import HISTORY_LIMIT, USE_MEM
+from jumis.llm.token_usege import DBTokenLogger
 # from database.memories import load_memories
 import json
+load_dotenv('.env.llm')
 
 
 
 
-class DeepSeek:
+
+
+
+class LLMWorker:
     def __init__(self):
-        ''' Инициализация DeepSeek и его настроек.
-            Если заблокируют и его, то нужно будет отдельно использовать 
-            http прокси.
-        '''
-        self.key_queue = create_key_queue() # Создаем Очередь ключей
-        self.http_client = httpx.AsyncClient(proxy=None) # Создаём ОДИН общий клиент и # явно отключаем прокси
+        ''' Экземпляр работы с LLM через litellm'''
+        litellm.cache = litellm.Cache(type="local") # Включаем локальный в памяти (In-Memory) кэш одной строчкой
+        litellm.callbacks = [DBTokenLogger()] # Регистрируем класс в глобальный список коллбеков
+
+        os.environ["DEEPSEEK_API_KEY"]
+        os.environ["OPENAI_API_KEY"]
+        os.environ["ANTHROPIC_API_KEY"]
+        os.environ["GEMINI_API_KEY"]
+        os.environ["XAI_API_KEY"]
+
         self.dialog = []
         self.memories = []
         self.use_mem = USE_MEM
-        self.model = MODEL_DS
-        self.timeout = TIMEOUT
+        # self.model = MODEL_DS
+        # self.timeout = TIMEOUT
         self.history_limit = HISTORY_LIMIT
         self.functions = FUNCTIONS
         self.agents = AGENTS
@@ -86,7 +95,7 @@ class DeepSeek:
 
     async def call_function(self, func_name, arguments):
         """Вызывает зарегистрированную функцию с переданными аргументами.
-        Автоматически передаёт ds, если функция их ожидает.
+        Автоматически передаёт llm, если функция их ожидает.
         Поддерживает два формата регистрации:
             - прямая функция (callable)
             - словарь с ключом 'function' (для сложных случаев с описанием)
@@ -107,9 +116,9 @@ class DeepSeek:
             sig = inspect.signature(func)
             call_kwargs = dict(arguments)  # копируем аргументы
 
-            # Автоматически добавляем ds, если функция его принимает
-            if 'ds' in sig.parameters:
-                call_kwargs['ds'] = self
+            # Автоматически добавляем llm, если функция его принимает
+            if 'llm' in sig.parameters:
+                call_kwargs['llm'] = self
 
             # Вызов в зависимости от типа функции
             if inspect.iscoroutinefunction(func):
@@ -165,112 +174,33 @@ class DeepSeek:
             dialog: list = None,
             response_format: dict = None
         ):
-        """
-        Чистый вызов API DeepSeek с автоматическим бесконечным ожиданием 
-        восстановления сети при сбоях.
-        """
-        # 1. Сборка сообщений — чистая синхронная логика, скрывать в try-except не нужно
+        """ Чистый вызов LLM """
+
         messages = [{"role": "system", "content": system}]
         if dialog is not None:
             messages.extend(dialog)
         elif self.dialog:
             messages.extend(self.dialog)
 
-        # Для Stateless (одноразовых) запросов
         if question:
             messages.append({"role": "user", "content": question})
 
         print("\ndialog:", json.dumps(messages, indent=2, ensure_ascii=False, default=str))
-        print("Waiting for free DeepSeek API key...")
 
-        # 2. Берем ключ из очереди ДО цикла ретраев. 
-        # Удерживаем его, пока идет процесс попыток соединения, чтобы не плодить хаос в очереди.
-        free_key_ds = await self.key_queue.get()
-        print(f"Got key ending with ...{free_key_ds[-4:]}")
 
-        retry_delay = 5  # Стартовая задержка при потере интернета
-        max_delay = 60   # Максимальная задержка, чтобы не спамить слишком часто
+        return await acompletion(
+            model="deepseek/deepseek-v4-flash",
+            # model="gemini/gemini-3.1-flash-lite-preview",
+            # model="anthropic/claude-sonnet-4-5-20250929",
+            # model="gpt-5",
+            # model="xai/grok-3-latest",
+            messages=messages,
+            tools=tools,
+            #response_format=response_format,
+            stream=stream,
+            tool_choice=self.tool_choice
+        )
 
-        try:
-            http_client_safe = getattr(self, "http_client", None)
-            client = AsyncOpenAI(
-                api_key=free_key_ds,
-                base_url="https://api.deepseek.com",
-                http_client=http_client_safe,
-            )
-
-            # Тот самый ТОЧЕЧНЫЙ цикл ретраев для сетевых операций
-            while True:
-                try:
-                    response = await client.chat.completions.create(
-                        model=self.model,
-                        messages=messages,
-                        tools=tools,
-                        response_format=response_format,
-                        stream=stream,
-                        timeout=self.timeout,
-                        tool_choice=self.tool_choice
-                    )
-                    # Если дошли сюда — коннект успешный, выходим из цикла ретраев
-                    break
-
-                except (APIConnectionError, APITimeoutError) as net_err:
-                    # Сюда прилетают: нет интернета, упал DNS (Temporary failure in name resolution), таймаут сервера
-                    print(f"[СЕТЕВОЙ СБОЙ] Интернет отсутствует или сервер DeepSeek лежит: {net_err}")
-                    print(f"Ждем {retry_delay} сек. до следующей попытки реквеста...")
-                    
-                    await asyncio.sleep(retry_delay)
-                    retry_delay = min(retry_delay * 2, max_delay)  # Увеличиваем шаг ожидания
-                    continue  # Уходим на следующий круг while True
-
-                except RateLimitError:
-                    # Поймали 429 ошибку (закончились деньги на ключе или слишком много запросов в секунду)
-                    print("[RATE LIMIT] Превышены лимиты частоты запросов. Ждем 15 секунд...")
-                    await asyncio.sleep(15)
-                    continue
-
-                except APIError as e:
-                    # Фатальные ошибки самого API (например, неверные параметры, дохлый/забаненный ключ)
-                    # Ретраить их бесконечно нет смысла — они не починятся при появлении интернета
-                    print(f"[ФАТАЛЬНАЯ ОШИБКА API] {e.__class__.__name__}: {str(e)}")
-                    # Пробрасываем ошибку выше, чтобы её обработал вызывающий воркер (или заменил ключ)
-                    raise e
-                
-                except Exception as unexpected_error:
-                    # ВЫЯВЛЕНИЕ «НЛО» (баги кода, косяки типов данных, внутренние ошибки библиотеки)
-                    print(f"💥 КРИТИЧЕСКИЙ И НЕПРЕДВИДЕННЫЙ СБОЙ: {unexpected_error.__class__.__name__}: {unexpected_error}")
-                    # Срочно выходим из цикла! Ретраить это бесконечно бессмысленно.
-                    raise unexpected_error
-
-            # 3. Обработка успешного ответа
-            if stream:
-                async def stream_wrapper(api_stream, key):
-                    try:
-                        async for chunk in api_stream:
-                            yield chunk
-                    except (APIConnectionError, APITimeoutError) as stream_net_err:
-                        # Обработка обрыва связи ПОСЕРЕДИНЕ скачивания чанков текста
-                        print(f"[ОБРЫВ СТРИМА] Интернет пропал во время получения чанков: {stream_net_err}")
-                    finally:
-                        # Ключ вернётся в очередь СТРОГО после закрытия или падения стрима
-                        self.key_queue.put_nowait(key)
-                        print(f"Stream finished. Key ...{key[-4:]} returned to queue.")
-
-                key_to_release = free_key_ds
-                free_key_ds = None  # Зануляем, чтобы внешний `finally` не вернул ключ раньше времени
-                return stream_wrapper(response, key_to_release)
-            
-            # Если запрос обычный (stream=False) — просто отдаем response. 
-            # Внешний `finally` ниже сам вернет ключ в очередь сразу после этого return.
-            return response
-
-        finally:
-            # Этот блок гарантированно сработает в двух случаях:
-            # 1. При stream=False (когда запрос прошел успешно)
-            # 2. Если внутри цикла вылетела фатальная APIError (чтобы ключ не улетел в никуда)
-            if free_key_ds is not None:
-                self.key_queue.put_nowait(free_key_ds)
-                print(f"Simple call finished. Key ...{free_key_ds[-4:]} returned to queue.")
 
 
 
@@ -455,22 +385,22 @@ class DeepSeek:
         )
 
         message = response.choices[0].message
-        usage = response.usage
+        # usage = response.usage
 
         result = {
             'type': 'text',
             'content': message.content or '',
         }
 
-        if usage:
-            result['usage'] = {
-                'completion_tokens': usage.completion_tokens,
-                'prompt_tokens': usage.prompt_tokens,
-                'total_tokens': usage.total_tokens,
-                'cached_tokens': getattr(
-                    usage.prompt_tokens_details, 'cached_tokens', 0
-                ) if usage.prompt_tokens_details else 0
-            }
+        # if usage:
+        #     result['usage'] = {
+        #         'completion_tokens': usage.completion_tokens,
+        #         'prompt_tokens': usage.prompt_tokens,
+        #         'total_tokens': usage.total_tokens,
+        #         'cached_tokens': getattr(
+        #             usage.prompt_tokens_details, 'cached_tokens', 0
+        #         ) if usage.prompt_tokens_details else 0
+        #     }
 
         return result
 
@@ -676,16 +606,16 @@ class DeepSeek:
                 for tc in message.tool_calls
             ]
 
-        # Статистика
-        if usage:
-            result['usage'] = {
-                'completion_tokens': usage.completion_tokens,
-                'prompt_tokens': usage.prompt_tokens,
-                'total_tokens': usage.total_tokens,
-                'cached_tokens': getattr(
-                    usage.prompt_tokens_details, 'cached_tokens', 0
-                ) if usage.prompt_tokens_details else 0
-            }
+        # # Статистика
+        # if usage:
+        #     result['usage'] = {
+        #         'completion_tokens': usage.completion_tokens,
+        #         'prompt_tokens': usage.prompt_tokens,
+        #         'total_tokens': usage.total_tokens,
+        #         'cached_tokens': getattr(
+        #             usage.prompt_tokens_details, 'cached_tokens', 0
+        #         ) if usage.prompt_tokens_details else 0
+        #     }
 
         return result
 
