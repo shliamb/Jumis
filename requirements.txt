@@ -22,6 +22,7 @@ soundfile==0.14.0
 
 # В ручную:
 # uv pip install kairos-asr[gpu]
+# pip install sentence-transformers
 
 
 # Везде добавляю uv

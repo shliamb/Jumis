@@ -11,3 +11,4 @@ session_jumis.session
 session_jumis.session-journal
 models_cache/huggingface
 models_cache/torch
+models_cache/embeddings

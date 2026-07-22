@@ -37,10 +37,10 @@ import json
     
 
 
-# async def get_date():
-#     """ Получение даты """
-#     from datetime import datetime
-#     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+async def get_date():
+    """ Получение даты """
+    from datetime import datetime
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
  
 
 
@@ -312,15 +312,15 @@ FUNCTIONS = {
     #     }
     # },
 
-    # "get_date": {
-    #     "description": "Получить текущую дату и время. Используй, когда нужно узнать текущее время.",
-    #     "function": get_date,
-    #     "schema": {
-    #         "type": "object",
-    #         "properties": {},
-    #         "required": []
-    #     }
-    # },
+    "get_date": {
+        "description": "Получить текущую дату и время. Используй, когда нужно узнать текущее время.",
+        "function": get_date,
+        "schema": {
+            "type": "object",
+            "properties": {},
+            "required": []
+        }
+    },
 
     # "get_tasks": {
     #     "description": "Получить список задач по выбранным статусам. Используй всегда, когда нужно проверить текущие таски по статусу.",
