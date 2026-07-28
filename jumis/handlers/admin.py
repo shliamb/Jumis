@@ -4,13 +4,14 @@ from logs.set_logger import set_logger
 logger = set_logger(name="admin")
 from aiogram import Router, types, F
 from aiogram.filters import Command
-from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import ReplyKeyboardRemove
-from aiogram.fsm.context import FSMContext
+# from aiogram.fsm.state import State, StatesGroup
+# from aiogram.types import ReplyKeyboardRemove
+# from aiogram.fsm.context import FSMContext
 from config import DOWNLOAD, ADMIN_ID, PATH_LOGS
 from database.create_tables import create_tables_in_db
 from database.deleted_tables_db import drop_all_tables_and_reset_schema
-import os
+from handlers.common import rights_verification
+# import os
 import asyncio
 from pathlib import Path
 from io import BytesIO
@@ -20,23 +21,6 @@ from io import BytesIO
 router = Router()
 
 
-
-# CHECK RIGHTS USER TELEGRAM
-async def rights_verification(user_id: int, lang: str, message: types.Message) -> bool:
-    """ Проверка прав доступа """
-
-    if message.chat.type != 'private':  # group
-        return False
-
-    if user_id in {ADMIN_ID}:
-        return True
-    
-    if lang == "ru": await message.answer("🔐 Вы не имеете доступа!")
-    else: await message.answer("🔐 You don't have access")
-
-    logger.error(f"This {user_id} shit made an attempt to enter to Admin Panel.")
-    return False
- 
 
 #### ADMIN MENU ####
 ####################

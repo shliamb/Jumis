@@ -1,41 +1,13 @@
-# from database.tasks import add_task, delete_task_db, get_tasks_by_statuses, edit_task_db, get_task_by_id
-# from database.workers import get_workers, edit_worker_by_id
-# from database.devices import get_devices_by_worker_id, edit_device_id
-# from database.memories import add_memory, del_memory
-from utils.validate_task import clean_task, clean_worker, clean_device
+# jumis/llm/functions.py
+from database.memories import add_fact, get_facts_by_category, get_facts_by_user_id
+from database.users import get_all_users, db_get_user, db_update_user
 from datetime import datetime
+from logs.set_logger import set_logger
+logger = set_logger(name="llmfunc")
 import json
 
 
-# async def save_task(task) -> str:
-#     try:
-#         print("\n\nraw_data_task:", task, "\n")
-#         task_data = task.get("task", task)  
-#         print("\n\ntask_data:", task_data, "\n")
-        
-#         cleaned = clean_task(task_data)
-#         print("\n\ncleaned:", cleaned, "\n")
-        
-#         # --- СТРАХОВКА ДЛЯ ЗАПИСИ В TEXT ПОЛЯ БД ---
-#         # Если модель передала execution_log, result или error как объекты (list/dict),
-#         # сериализуем их в JSON-строку, чтобы база скушала их как TEXT
-#         for field in ["execution_log", "result", "error"]:
-#             if field in cleaned and isinstance(cleaned[field], (list, dict)):
-#                 cleaned[field] = json.dumps(cleaned[field], ensure_ascii=False)
-#         # --------------------------------------------
-
-#         task_id = await add_task(cleaned)
-#         print("\n\ntask_id:", task_id, "\n") 
-        
-#         if isinstance(task_id, int) and task_id > 0:
-#             return f"Таска успешно добавлена, id: {task_id}"
-#         else:
-#             return f"Ошибка при сохранении: {task_id}"
-#     except Exception as e:
-#         print(f"Исключение в save_task: {e}")
-#         return f"Ошибка: {e}, таска не сохранена"
-    
-
+########## DATE ###############
 
 async def get_date():
     """ Получение даты """
@@ -44,141 +16,155 @@ async def get_date():
  
 
 
+###### MEMORIES ##########
 
-# async def get_task(id: int) -> str:
-#     """Получение данных одной задачи в текстовом формате, оптимизированном для контекста ИИ-агента."""
-#     try:
-#         # Получаем сырые данные из БД
-#         task_data = await get_task_by_id(id)
-#         if not task_data:
-#             return f"Таска с id={id} не найдена."
+async def write_fact(category: str, content: str, user_id: int = None) -> str:
+    """ Сохранить важную информацию/факт в долговременную память."""
+    fact_data = {
+        "user_id": user_id,
+        "category": category,
+        "content": content
+    }
+    return await add_fact(fact_data)
+
+
+
+async def write_fact(content: str, category: str, user_id: int = None) -> str:
+    """ Сохранить важную информацию/факт в долговременную память."""
+    try:
+        # 1. Собираем словарь данных
+        fact_data = {
+            "content": content,
+            "category": category,
+        }
         
-#         parts = []
-#         # Исключаем служебные таймстампы и гигантские логи
-#         skip_keys = {'created_at', 'started_at', 'completed_at', 'execution_log'}
-        
-#         for key, value in task_data.items():
-#             # Особое условие автора: если run_at пустой, всё равно показываем его агенту
-#             if key == 'run_at' and not value:
-#                 parts.append(f"{key}: {value}")
-#                 continue
-            
-#             # Пропускаем ненужные ключи, пустые строки и None
-#             if key in skip_keys or value is None or value == '':
-#                 continue
-            
-#             # Красивое сжатие сложных структур данных (словари и списки) в JSON
-#             if isinstance(value, (list, dict)):
-#                 json_str = json.dumps(value, ensure_ascii=False)
-#                 # Если это результат выполнения, делаем его покороче (50 симв), для остального — 100 симв.
-#                 limit = 50 if key == 'result' else 100
-#                 value = json_str[:limit] + "..." if len(json_str) > limit else json_str
-            
-#             # Приведение datetime к читаемому ИИ формату (без микросекунд)
-#             elif isinstance(value, datetime):
-#                 value = value.strftime('%Y-%m-%d %H:%M')
-                
-#             # Формируем строку с пробелом после двоеточия для идеальной токенизации
-#             parts.append(f"{key}: {value}")
-            
-#         # Возвращаем плоскую строку для одной конкретной задачи
-#         return " | ".join(parts)
-        
-#     except Exception as e:
-#         print(f"[AGENT TOOL ERROR] Ошибка в функции get_task: {e}")
-#         return f"Не удалось получить данные задачи из-за внутренней ошибки: {e}"
+        # user_id добавляем только если он передан (чтобы не перебивать NULL)
+        if user_id is not None and user_id != 0:
+            fact_data["user_id"] = user_id
+
+        # 2. Генерируем вектор (если используешь векторизацию)
+        # embedding = await get_embedding(content)
+        # if embedding:
+        #     fact_data["embedding"] = embedding
+
+
+        # # Запись в БД быстро
+        # fact_id = await save_fact_to_db(...) 
+
+        # # Фоновая задача улетает параллельно, не блокируя ответ клиенту
+        # asyncio.create_task(background_vectorize_fact(fact_id, content))
+
+        # 3. ПЕРЕДАЕМ РОВНО ОДИН АРГУМЕНТ (СЛОВАРЬ)
+        success = await add_fact(fact_data)
+
+        if success:
+            return "Fact successfully written to memory."
+        else:
+            return "Error: Could not save fact to database."
+
+    except Exception as e:
+        #logger.error(f"Error in write_fact handler: {e}")
+        return f"Error executing write_fact: {str(e)}"
+
+
+
+
+
+async def facts_by_cat(category: str) -> str:
+    """Возвращает отформатированный список фактов категории с флагом наличия вектора."""
+    if not category or not category.strip():
+        logger.warning("Attempted to fetch facts with an empty category.")
+        return "No facts found: Category was not specified."
+
+    cat_clean = category.strip()
+    facts: list[dict] = await get_facts_by_category(cat_clean)
+
+    if not facts:
+        logger.info("No facts found for category: '%s'", cat_clean)
+        return f"No facts stored in category '{cat_clean}'."
+
+    formatted_lines = []
     
-        
+    for item in facts:
+        content = item.get("content", "").strip()
+        if not content:
+            continue
 
+        # 1. Дата без миллисекунд и секунд
+        created_at = item.get("created_at")
+        if isinstance(created_at, datetime):
+            date_str = created_at.strftime("%Y-%m-%d %H:%M")
+        elif created_at:
+            date_str = str(created_at)[:16]
+        else:
+            date_str = "no-date"
 
-# async def get_tasks(statuses: list) -> str:
-#     """Получение всех задач в плоском текстовом формате, оптимизированном для контекста ИИ-агента."""
-#     try:
-#         # Вызываем нашу оптимизированную функцию работы с БД
-#         rows = await get_tasks_by_statuses(statuses)
-#         if not rows:
-#             return "Задачи с указанными статусами не найдены."
-        
-#         result = []
-#         # Исключаем служебные таймстампы и гигантские логи, чтобы экономить контекстное окно модели
-#         skip_keys = {'created_at', 'started_at', 'completed_at', 'execution_log'}
-        
-#         for row in rows:
-#             parts = []
-#             for key, value in row.items():
-#                 # Особое условие автора: если run_at пустой, всё равно показываем его агенту
-#                 if key == 'run_at' and not value:
-#                     parts.append(f"{key}: {value}")
-#                     continue
-                
-#                 # Пропускаем ненужные ключи, пустые строки и None
-#                 if key in skip_keys or value is None or value == '':
-#                     continue
-                
-#                 # Красивое сжатие сложных структур данных (словари и списки) в JSON
-#                 if isinstance(value, (list, dict)):
-#                     json_str = json.dumps(value, ensure_ascii=False)
-#                     # Если это результат выполнения, делаем его покороче (50 симв), для остального — 100 симв.
-#                     limit = 50 if key == 'result' else 100
-#                     value = json_str[:limit] + "..." if len(json_str) > limit else json_str
-                
-#                 # Приведение datetime к читаемому ИИ формату (без микросекунд)
-#                 elif isinstance(value, datetime):
-#                     value = value.strftime('%Y-%m-%d %H:%M')
-                    
-#                 # Формируем строку с пробелом после двоеточия для идеальной токенизации
-#                 parts.append(f"{key}: {value}")
-                
-#             result.append(" | ".join(parts))
-            
-#         return "\n".join(result)
-        
-#     except Exception as e:
-#         print(f"[AGENT TOOL ERROR] Ошибка в функции get_tasks: {e}")
-#         return f"Не удалось получить список задач из-за внутренней ошибки: {e}"
+        # 2. Метка владельца
+        user_id = item.get("user_id")
+        owner_tag = f"[User #{user_id}]" if user_id else "[Global]"
+
+        # 3. Флаг наличия эмбеддинга (True / False)
+        # Проверяем, что вектор не None и не пустой
+        has_vector = bool(item.get("embedding"))
+        vec_tag = "[vec: true]" if has_vector else "[vec: false]"
+
+        # 4. Собираем итоговую строчку
+        formatted_lines.append(f"• ({date_str}) {owner_tag} {vec_tag} {content}")
+
+    if not formatted_lines:
+        return f"No valid facts found in category '{cat_clean}'."
+
+    header = f"=== Stored facts in '{cat_clean}' ({len(formatted_lines)}) ==="
+    return f"{header}\n" + "\n".join(formatted_lines)
 
 
 
-# async def delete_task(task_id: int) -> str:
-#     """ Удаление таски """
-#     try:
-#         conf = await delete_task_db(task_id)
-#         return conf
-#     except Exception as e:
-#         return f"Ошибка удаления таски: {e}"
 
+async def facts_by_user(user_id: int) -> str:
+    """Возвращает сжатый и отформатированный список фактов по конкретному user_id для LLM."""
+    if not user_id or user_id <= 0:
+        logger.warning("Attempted to fetch facts with an invalid user_id: %s", user_id)
+        return "No facts found: Invalid or missing user_id."
 
+    facts: list[dict] = await get_facts_by_user_id(user_id)
 
-# async def update_task(task_data: dict) -> str:
-#     """ Обновить задачу (вызывается агентом). Ожидает словарь с ключами 'id' и любыми другими полями для изменения."""
-#     try:
-#         # Проверим, что id передан
-#         if 'id' not in task_data:
-#             return "Ошибка: не указан id задачи"
-        
-#         cleaned = clean_task(task_data)
-        
-#         # --- СТРАХОВКА ДЛЯ UPDATE В TEXT ПОЛЯ БД ---
-#         # Если агент пытается обновить логи или результаты сложными структурами,
-#         # переводим их в JSON-строку, чтобы Postgres сожрал их как TEXT
-#         for field in ["execution_log", "result", "error"]:
-#             if field in cleaned and isinstance(cleaned[field], (list, dict)):
-#                 cleaned[field] = json.dumps(cleaned[field], ensure_ascii=False)
-#         # --------------------------------------------
+    if not facts:
+        logger.info("No facts found for user_id: %s", user_id)
+        return f"No stored facts found for user #{user_id}."
 
-#         success = await edit_task_db(cleaned)
-#         if success:
-#             return f"Задача {task_data['id']} обновлена"
-#         else:
-#             return f"Не удалось обновить задачу {task_data['id']}"
-#     except Exception as e:
-#         print(f"Исключение в update_task: {e}") # Чтобы в консоли сервера тоже было видно, если что-то пойдет не так
-#         return f"Ошибка обновления: {e}"
+    formatted_lines = []
+    
+    for item in facts:
+        content = item.get("content", "").strip()
+        if not content:
+            continue
 
+        # 1. Дата без секунд и миллисекунд
+        created_at = item.get("created_at")
+        if isinstance(created_at, datetime):
+            date_str = created_at.strftime("%Y-%m-%d %H:%M")
+        elif created_at:
+            date_str = str(created_at)[:16]
+        else:
+            date_str = "no-date"
 
-# async def write_mem(category: str, key: str, text: str) -> str:
-#     """ Сохранить/Обновить важную информацию в долговременную память."""
-#     return await add_memory(category, key, text)
+        # 2. Категория факта (чтобы модель понимала контекст)
+        category = item.get("category", "general")
+        cat_tag = f"[{category}]"
+
+        # 3. Флаг наличия эмбеддинга
+        has_vector = bool(item.get("embedding"))
+        vec_tag = "[vec: true]" if has_vector else "[vec: false]"
+
+        # 4. Собираем строчку
+        formatted_lines.append(f"• ({date_str}) {cat_tag} {vec_tag} {content}")
+
+    if not formatted_lines:
+        return f"No valid facts found for user #{user_id}."
+
+    header = f"=== Stored facts for User #{user_id} ({len(formatted_lines)}) ==="
+    return f"{header}\n" + "\n".join(formatted_lines)
+
 
 
 # async def del_mem(category: str, key: str) -> str:
@@ -186,134 +172,237 @@ async def get_date():
 #     return await del_memory(category, key)
 
 
-# async def get_data_workers() -> str:
-#     """ Получить список всех воркеров """
-#     try:
-#         rows: list[dict] = await get_workers()
-#         if not rows:
-#             return "Нет Worker"
-#         result = []
-#         # Поля, которые не нужны агенту (слишком технические или большие)
-#         skip_keys = {'crypto_key'}
-#         for row in rows:
-#             parts = []
-#             for key, value in row.items():
-#                 if key in skip_keys or value is None or value == '':
-#                     continue
-#                 # Для datetime - без микросекунд
-#                 elif isinstance(value, datetime):
-#                     value = value.strftime('%Y-%m-%d %H:%M')
-#                 parts.append(f"{key}:{value}")
-#             result.append(" | ".join(parts))
-#         # print("\n".join(result))
-#         return "\n".join(result)
-#     except Exception as e:
-#         print(f"Ошибка получения workers: {e}")
-#         return f"Ошибка получения workers: {e}"
+####### USERS ###########
 
 
 
-# async def update_worker(worker_data: dict) -> str:
-#     """ Обновление воркера """
-#     try:
-#         # Проверим, что id передан
-#         if 'id' not in worker_data:
-#             return "Ошибка: не указан id воркера"
+async def get_users() -> str:
+    """Возвращает отформатированный список всех пользователей со всеми полями из БД для LLM."""
+    users: list[dict] = await get_all_users()
+
+    if not users:
+        logger.info("No users found in database.")
+        return "No registered users found in the database."
+
+    formatted_users = []
+    
+    for u in users:
+        user_id = u.get("id", "N/A")
         
-#         cleaned = clean_worker(worker_data)
-#         success = await edit_worker_by_id(cleaned)
-#         if success:
-#             return f"Воркер {worker_data['id']} обновлен"
-#         else:
-#             return f"Не удалось обновить воркера {worker_data['id']}"
-#     except Exception as e:
-#         return f"Ошибка обновления воркера: {e}"
+        # 1. Собираем активные флаги статуса
+        flags = []
+        if u.get("is_admin"):
+            flags.append("ADMIN")
+        if u.get("is_blocked"):
+            flags.append("BLOCKED")
+        if u.get("is_whitelisted"):
+            flags.append("WHITELISTED")
+        if u.get("is_bot"):
+            flags.append("BOT")
+        flags_str = f" [{', '.join(flags)}]" if flags else ""
 
+        # 2. Дата регистрации без секунды/миллисекунд
+        created_at = u.get("created_at")
+        if isinstance(created_at, datetime):
+            date_str = created_at.strftime("%Y-%m-%d %H:%M")
+        elif created_at:
+            date_str = str(created_at)[:16]
+        else:
+            date_str = "no-date"
 
+        # Заголовок карточки пользователя
+        user_lines = [f"• User #{user_id}{flags_str} (registered: {date_str})"]
 
-# async def get_devices_worker(worker_id: int) -> str:
-#     """ Получить данные всех устройств воркера по его id """
-#     try:
-#         rows: list[dict] = await get_devices_by_worker_id(worker_id) # worker_id - telegram_id
-#         if not rows:
-#             return f"Нет устройств у воркера {worker_id}"
-#         result = []
-#         # Поля, которые не нужны агенту (слишком технические или большие)
-#         skip_keys = {'connected', 'hidden'}
-#         for row in rows:
-#             parts = []
-#             for key, value in row.items():
-#                 if key in skip_keys or value is None or value == '':
-#                     continue
-#                 # Для datetime - без микросекунд
-#                 elif isinstance(value, datetime):
-#                     value = value.strftime('%Y-%m-%d %H:%M')
-#                 parts.append(f"{key}:{value}")
-#             result.append(" | ".join(parts))
-#         # print("\n".join(result))
-#         return "\n".join(result)
-#     except Exception as e:
-#         print(f"Ошибка получения устройств воркера {worker_id}: {e}")
-#         return f"Ошибка получения устройств воркера {worker_id}: {e}"
-
-
-# async def update_device(device_data: dict) -> str:
-#     """ Обнавление данных устройства по его id """
-#     try:
-#         # Проверим, что id передан
-#         if 'id' not in device_data:
-#             return "Ошибка: не указан id устройства"
+        # 3. Идентификаторы и контакты
+        contacts = []
+        if tg_id := u.get("tg_id"):
+            contacts.append(f"TG ID: {tg_id}")
+        if username := u.get("username"):
+            contacts.append(f"@{username}")
+        if full_name := u.get("full_name"):
+            contacts.append(f"Name: {full_name}")
+        if phone := u.get("phone"):
+            contacts.append(f"Phone: {phone}")
         
-#         cleaned = clean_device(device_data)
-#         success = await edit_device_id(cleaned)
-#         if success:
-#             return f"Данные устройства {device_data['id']} обновлены"
-#         else:
-#             return f"Не удалось обновить данные устройства {device_data['id']}"
-#     except Exception as e:
-#         return f"Ошибка обновления данных устройства: {e}"
+        if contacts:
+            user_lines.append(f"  - Contacts: {' | '.join(contacts)}")
+
+        # 4. Категория, язык и модели
+        sys_info = []
+        if category := u.get("category"):
+            sys_info.append(f"Category: {category}")
+        if lang := u.get("lang_code"):
+            sys_info.append(f"Lang: {lang}")
+        if model_def := u.get("model_default"):
+            sys_info.append(f"Model: {model_def}")
+        if model_cheap := u.get("model_cheap"):
+            sys_info.append(f"Model Cheap: {model_cheap}")
+        if model_smart := u.get("model_smart"):
+            sys_info.append(f"Model Smart: {model_smart}")
+
+        if sys_info:
+            user_lines.append(f"  - System: {' | '.join(sys_info)}")
+
+        # 5. Ручные заметки и ИИ-саммари
+        if comment := u.get("comment"):
+            user_lines.append(f"  - Comment: {comment}")
+        if summary := u.get("summary"):
+            user_lines.append(f"  - AI Summary: {summary}")
+
+        formatted_users.append("\n".join(user_lines))
+
+    header = f"=== Registered Users ({len(users)}) ==="
+    return f"{header}\n\n" + "\n\n".join(formatted_users)
+
+
+
+
+
+
+async def get_user(
+    user_id: int | None = None,
+    tg_id: int | None = None,
+    username: str | None = None
+) -> str:
+    """Поиск профиля пользователя по user_id (БД), tg_id или username."""
+    if not user_id and not tg_id and not username:
+        logger.warning("Attempted to call get_user without any identifier.")
+        return "Error: Provide at least one identifier (user_id, tg_id, or username)."
+
+    # Запрашиваем пользователя через единую функцию БД
+    data_user = await db_get_user(user_id=user_id, tg_id=tg_id, username=username)
+
+    if not data_user:
+        target = f"id={user_id}" if user_id else (f"tg_id={tg_id}" if tg_id else f"username='{username}'")
+        logger.info("User not found for %s", target)
+        return f"User not found ({target})."
+
+    # Извлечение полей
+    u_id = data_user.get("id")
+    u_tg_id = data_user.get("tg_id") or "N/A"
+    u_uname = data_user.get("username")
+    uname_str = f"@{u_uname}" if u_uname else "no username"
+
+    # Флаги статуса
+    flags = []
+    if data_user.get("is_admin"):
+        flags.append("ADMIN")
+    if data_user.get("is_blocked"):
+        flags.append("BLOCKED")
+    if data_user.get("is_whitelisted"):
+        flags.append("WHITELISTED")
+    if data_user.get("is_bot"):
+        flags.append("BOT")
+    
+    flags_str = f" [{', '.join(flags)}]" if flags else ""
+
+    # Дата регистрации
+    created_at = data_user.get("created_at")
+    if isinstance(created_at, datetime):
+        date_str = created_at.strftime("%Y-%m-%d %H:%M")
+    elif created_at:
+        date_str = str(created_at)[:16]
+    else:
+        date_str = "no-date"
+
+    # Формирование ответа
+    lines = [
+        f"=== User Profile #{u_id}{flags_str} ===",
+        f"• TG ID: {u_tg_id} | Username: {uname_str}"
+    ]
+
+    if full_name := data_user.get("full_name"):
+        lines.append(f"• Name: {full_name}")
+    if phone := data_user.get("phone"):
+        lines.append(f"• Phone: {phone}")
+    if category := data_user.get("category"):
+        lines.append(f"• Category: {category}")
+    if lang := data_user.get("lang_code"):
+        lines.append(f"• Lang: {lang}")
+    if model_default := data_user.get("model_default"):
+        lines.append(f"• Model: {model_default}")
+    if comment := data_user.get("comment"):
+        lines.append(f"• Comment: {comment}")
+    if summary := data_user.get("summary"):
+        lines.append(f"• AI Summary: {summary}")
+
+    lines.append(f"• Registered: {date_str}")
+
+    return "\n".join(lines)
+
+
+
+
+
+
+async def update_user(
+    user_id: int | None = None,
+    tg_id: int | None = None,
+    target_username: str | None = None,
+    **kwargs
+) -> str:
+    """Обновление профиля пользователя по одному из идентификаторов."""
+    
+    user_data = {}
+    target_label = ""
+
+    # 1. Выбираем СТРОГО один приоритетный идентификатор для поиска
+    if user_id:
+        user_data["id"] = user_id
+        target_label = f"ID #{user_id}"
+    elif tg_id:
+        user_data["tg_id"] = tg_id
+        target_label = f"TG ID #{tg_id}"
+    elif target_username:
+        clean_target = target_username.strip().lstrip("@")
+        user_data["username"] = clean_target
+        target_label = f"@{clean_target}"
+    else:
+        logger.warning("Attempted to call update_user without any target identifier.")
+        return "Error: Provide at least one identifier (user_id, tg_id, or target_username)."
+
+    # 2. Исключаем ключи-идентификаторы из kwargs, чтобы AI не изменил случайно ключевые ID
+    IDENTIFIER_KEYS = {"user_id", "tg_id", "target_username", "id"}
+    
+    # Собираем только валидные поля для изменения
+    update_fields = {}
+    for key, val in kwargs.items():
+        if key in IDENTIFIER_KEYS or val is None:
+            continue
+        
+        # Если меняется логин пользователя (колонка username) — зачищаем @
+        if key == "username" and isinstance(val, str):
+            val = val.strip().lstrip("@")
+            
+        update_fields[key] = val
+
+    # 3. Проверяем, передал ли AI хоть одно поле для изменения
+    if not update_fields:
+        return f"Error: No fields provided to update for user ({target_label})."
+
+    # Объединяем идентификатор и редактируемые поля в один словарь для db_update_user
+    user_data.update(update_fields)
+
+    # 4. Вызываем функцию БД (db_update_user возвращает True / False)
+    success = await db_update_user(user_data)
+
+    if not success:
+        logger.error("Failed to update user %s", target_label)
+        return f"Error: User '{target_label}' not found or database update failed."
+
+    # 5. Возвращаем чёткое подтверждение для LLM
+    changed_keys = ", ".join(update_fields.keys())
+    logger.info("Successfully updated User (%s) fields: %s", target_label, changed_keys)
+    return f"Success: User ({target_label}) updated. Fields changed: [{changed_keys}]."
+
 
 
 
 
 FUNCTIONS = {
-    # "save_task": {
-    #     "description": "Сохранить задачу в базу данных. Вызывай для планирования следующего циклического шага.",
-    #     "function": save_task,
-    #     "schema": {
-    #         "type": "object",
-    #         "properties": {
-    #             "task": {
-    #                 "type": "object",
-    #                 "description": "Данные задачи в соответствии с таблицей tasks",
-    #                 "properties": {
-    #                     "target_type": {"type": "string", "description": "any, worker, device"},
-    #                     "target_id": {"type": ["integer", "null"], "description": "Если выбран target_type = worker, то указываем workers.telegram_id"},
-    #                     "target_device_sn": {"type": ["string", "null"], "description": "Если выбран target_type = device, то указываем devices.sn"},
-    #                     "schedule_type": {"type": "string", "description": "once, cyclic"},
-    #                     "run_at": {"type": ["string", "null"], "description": "Выставить время выполнения в TIMESTAMP (пример '2026-06-21 14:52')"},
-    #                     "priority": {"type": "integer", "description": "чем больше, тем важнее"},
-    #                     "comment": {"type": "string", "description": "Основное описание задачи таски"},
-    #                     "status": {"type": "string", "description": "Статус таски, по умолчанию pending"},
-    #                     "max_retries": {"type": "integer", "description": "Максимальное количество попыток выполнить таску, по умолчанию 3"},
-    #                     "notify_admin": {"type": "boolean", "description": "Включение уведомления админу, по умолчанию False"},
-    #                     "debug_thinking": {"type": "boolean", "description": "Активация вывода хода мыслей агента, по умолчанию False"},
-    #                     "llm_model": {"type": ["string", "null"], "description": "Модель для управления телефоном, по умолчанию deepseek-chat"},
-    #                     "max_agent_steps": {"type": ["integer", "null"], "description": "Максимальное количество шагов агента на телефоне"},
-
-    #                     "root_id": {"type": ["integer", "null"], "description": "ID самой первой таски-прародителя цепочки. Переноси из инструкции."},
-    #                     "iteration_number": {"type": "integer", "description": "Порядковый номер текущего повтора (шаг цепочки)."},
-    #                     "cyclic_instruction": {"type": ["string", "null"], "description": "Инструкция суб агенту для колонирования новой таски cyclic"}
-    #                 },
-    #                 "required": ["target_type", "schedule_type", "comment", "run_at", "root_id", "iteration_number"] # Сделали root и iteration обязательными для субагента
-    #             }
-    #         },
-    #         "required": ["task"]
-    #     }
-    # },
 
     "get_date": {
-        "description": "Получить текущую дату и время. Используй, когда нужно узнать текущее время.",
+        "description": "Returns the current system date and time. Provides precise temporal context for relative date calculations, scheduling, and time-sensitive queries.",
         "function": get_date,
         "schema": {
             "type": "object",
@@ -322,101 +411,133 @@ FUNCTIONS = {
         }
     },
 
-    # "get_tasks": {
-    #     "description": "Получить список задач по выбранным статусам. Используй всегда, когда нужно проверить текущие таски по статусу.",
-    #     "function": get_tasks,
-    #     "schema": {
-    #         "type": "object",
-    #         "properties": {
-    #             "statuses": {
-    #                 "type": "array",
-    #                 "items": {
-    #                     "type": "string",
-    #                     "enum": ["pending", "assigned", "running", "completed", "failed", "cancelled"]
-    #                 },
-    #                 "description": "Список статусов задач, которые необходимо выгрузить из базы данных."
-    #             }
-    #         },
-    #         "required": ["statuses"]
-    #     }
-    # },
+    "write_fact": {
+        "description": "Persists a key fact, user preference, or system rule into long-term memory for future context retrieval.",
+        "function": write_fact,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "content": {
+                    "type": "string", 
+                    "description": "Concise, distilled factual statement to store in memory."
+                },
+                "category": {
+                    "type": "string", 
+                    "enum": ["fact", "preference", "hardware", "agreement", "global_rule"],
+                    "description": "Functional classification of the stored memory."
+                },
+                "user_id": {
+                    "type": "integer", 
+                    "description": "Target client ID. Omit if storing a global system instruction or personal rule for Jumis."
+                }
+            },
+            "required": ["content", "category"]
+        }
+    },
 
-    # "get_task": {
-    #     "description": "Получить данные одной таски по id. Используй всегда, когда нужно получить данные таски.",
-    #     "function": get_task,
-    #     "schema": {
-    #         "type": "object",
-    #         "properties": {
-    #             "id": {
-    #                 "type": "integer",
-    #                 "description": "ID задачи"
-    #             }
-    #         },
-    #         "required": ["id"]
-    #     }
-    # },
+    "facts_by_cat": {
+        "description": "Retrieves all long-term memory facts filtered by a specified category.",
+        "function": facts_by_cat,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "category": {
+                    "type": "string",
+                    "enum": ["fact", "preference", "hardware", "agreement", "global_rule"],
+                    "description": "Target category to filter facts."
+                }
+            },
+            "required": ["category"]
+        }
+    },
 
-    # "delete_task": {
-    #     "description": "Удалить задачу по id. Используй, когда пользователь просит удалить задачу.",
-    #     "function": delete_task,
-    #     "schema": {
-    #         "type": "object",
-    #         "properties": {
-    #             "task_id": {
-    #                 "type": "integer",
-    #                 "description": "ID задачи"
-    #             }
-    #         },
-    #         "required": ["task_id"]
-    #     }
-    # },
+    "facts_by_user": {
+        "description": "Retrieves all long-term memory facts associated with a specific user_id.",
+        "function": facts_by_user,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "user_id": {
+                    "type": "integer", 
+                    "description": "Target client or user ID to fetch facts for."
+                }
+            },
+            "required": ["user_id"]
+        }
+    },
 
-    # "update_task": {
-    #     "description": "Обновить существующую задачу. Передай словарь с id и полями для изменения. Вызывай после подтверждения пользователя.",
-    #     "function": update_task,
-    #     "schema": {
-    #         "type": "object",
-    #         "properties": {
-    #             "task_data": {
-    #                 "type": "object",
-    #                 "description": "Словарь с id задачи и полями для обновления",
-    #                 "properties": {
-    #                     "id": {"type": "integer"},
-    #                     "target_type": {"type": "string", "description": "any, worker, device"},
-    #                     "target_id": {"type": ["integer", "null"], "description": "Если выбран target_type = worker, то указываем workers.telegram_id"},
-    #                     "target_device_sn": {"type": ["string", "null"], "description": "Если выбран target_type = device, то то указываем - devices.sn"},
-    #                     "schedule_type": {"type": "string", "description": "once, cyclic"},
-    #                     "run_at": {"type": ["string", "null"],  "description": "Время выполнения в TIMESTAMP (пример '2026-05-08 14:52')"},
-    #                     "cyclic_instruction": {"type": ["string", "null"],  "description": "Инструкция суб агенту для колонирования новой таски cyclic"},
-    #                     "priority": {"type": "integer", "description": "чем больше, тем важнее"},
-    #                     "comment": {"type": "string", "description": "Основное описание задачи таски"},
-    #                     "status": {"type": "string", "description": "Статус таски, по умолчанию pending, возможны - assigned, running, completed, failed, cancelled"},
-    #                     "max_retries": {"type": "integer", "description": "Максимальное колличество попыток выполнить таску, по умолчанию 3"},
-    #                     "notify_admin": {"type": "boolean", "description": "Включение личное уведомление админу о статусе этой задачи, по умолчанию False"},
-    #                     "debug_thinking": {"type": "boolean", "description": "Активация вывода в боте воркера ход мыслей агента таски, по умолчанию False"},
-    #                     "llm_model": {"type": ["string", "null"], "description": "Языковая модель которая будет использоваться для управления агентом телефона, по умолчанию - deepseek-chat"},
-    #                     "max_agent_steps": {"type": ["integer", "null"], "description": "Колличество максимальных итераций агента, по умолчанию - 30"}
-    #                 },
-    #                 "required": ["id"]
-    #             }
-    #         },
-    #         "required": ["task_data"]
-    #     }
-    # },
+    "get_users": {
+        "description": "Retrieves a list of all registered users and clients in the system.",
+        "function": get_users,
+        "schema": {
+            "type": "object",
+            "properties": {},
+            "required": []
+        }
+    },
 
-    # "write_memory": {
-    #     "description": "Сохранить или ОБНОВИТЬ важную информацию в память. Если категория (category) и ключ (key) уже существуют, старый текст автоматически заменится новым в один шаг (удалять старое перед вызовом НЕ НАДО). Сжимай данные до сути.",
-    #     "function": write_mem,
-    #     "schema": {
-    #         "type": "object",
-    #         "properties": {
-    #             "category": {"type": "string", "description": "Категория (н-р: 'user', 'project', 'infrastructure')"},
-    #             "key": {"type": "string", "description": "Уникальный slug-ключ (н-р: 'family_structure', 'huawei_state')"},
-    #             "text": {"type": "string", "description": "Сухой факт без воды"}
-    #         },
-    #         "required": ["category", "key", "text"]
-    #     }
-    # },
+    "get_user": {
+        "description": "Retrieves user profile details by internal Database User ID, Telegram ID, or username.",
+        "function": get_user,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "user_id": {
+                    "type": "integer", 
+                    "description": "Internal database primary key user ID (from get_users list)."
+                },
+                "tg_id": {
+                    "type": "integer", 
+                    "description": "Telegram user ID."
+                },
+                "username": {
+                    "type": "string", 
+                    "description": "Telegram username (e.g., 'john_doe' or '@john_doe')."
+                }
+            },
+            "required": []
+        }
+    },
+
+    "update_user": {
+        "description": "Updates profile attributes, notes, or flags for a user in the database.",
+        "function": update_user,
+        "schema": {
+            "type": "object",
+            "properties": {
+                # --- Идентификаторы (нужен хотя бы один) ---
+                "user_id": {
+                    "type": "integer", 
+                    "description": "Internal database user ID (PK)."
+                },
+                "tg_id": {
+                    "type": "integer", 
+                    "description": "Telegram user ID."
+                },
+                "target_username": {
+                    "type": "string", 
+                    "description": "Telegram username to search user by (e.g. 'john_doe')."
+                },
+
+                # --- Редактируемые поля ---
+                "full_name": {"type": "string", "description": "Full name of the user."},
+                "phone": {"type": "string", "description": "Phone number."},
+                "category": {"type": "string", "description": "Category (e.g., 'client', 'friend', 'spam', 'hardware')."},
+                "comment": {"type": "string", "description": "Personal manual note about the user."},
+                "summary": {"type": "string", "description": "AI-generated summary of past dialogue context."},
+                
+                # --- Флаги доступа ---
+                "is_admin": {"type": "boolean", "description": "Set admin status."},
+                "is_blocked": {"type": "boolean", "description": "Block or unblock user."},
+                "is_whitelisted": {"type": "boolean", "description": "Priority queue whitelist status."},
+                
+                # --- Настройки ---
+                "lang_code": {"type": "string", "description": "Language code (e.g. 'ru', 'en')."},
+                "model_default": {"type": "string", "description": "Default model name (e.g. 'deepseek/deepseek-v4-flash')."}
+            },
+            "required": []
+        }
+    }
 
     # "delete_memory": {
     #     "description": "Удалить конкретное воспоминание, если оно стало неактуальным.",
@@ -428,83 +549,6 @@ FUNCTIONS = {
     #             "key": {"type": "string"}
     #         },
     #         "required": ["category", "key"]
-    #     }
-    # },
-
-    # "get_workers": {
-    #     "description": "Получить список всех воркеров",
-    #     "function": get_data_workers,
-    #     "schema": {
-    #         "type": "object",
-    #         "properties": {},
-    #         "required": []
-    #     }
-    # },
-
-    # "update_worker": {
-    #     "description": "Обновить данные воркера. Передай словарь с id воркера и полями для изменения. Вызывай после подтверждения пользователя.",
-    #     "function": update_worker,
-    #     "schema": {
-    #         "type": "object",
-    #         "properties": {
-    #             "worker_data": {
-    #                 "type": "object",
-    #                 "description": "Словарь с id воркера и полями для обновления",
-    #                 "properties": {
-    #                     "id": {"type": "integer", "description": "id воркера "},
-    #                     "confirmed": {"type": "boolean", "description": "Подтверждён ли воркер (true/false)"},
-    #                     "name": {"type": ["string", "null"], "description": "Имя воркера"},
-    #                     "location": {"type": ["string", "null"], "description": "Локация воркера (например, 'Moscow')"},
-    #                     "comment": {"type": ["string", "null"], "description": "Комментарий"},
-    #                     "balance": {"type": "number"}
-    #                 },
-    #                 "required": ["id"]
-    #             }
-    #         },
-    #         "required": ["worker_data"]
-    #     }
-    # },
-
-    # "get_devices_worker": {
-    #     "description": "Получить данные всех устройств воркера по воркер telegram_id",
-    #     "function": get_devices_worker,
-    #     "schema": {
-    #         "type": "object",
-    #         "properties": {
-    #             "worker_id": {
-    #                 "type": "integer",
-    #                 "description": "telegram_id воркера "
-    #             }
-    #         },
-    #         "required": ["worker_id"]
-    #     }
-    # },
-
-    # "update_device": {
-    #     "description": "Обновить данные устройства. Передай словарь с идентификатором устройства id и полями для изменения. Вызывай после подтверждения пользователя.",
-    #     "function": update_device,
-    #     "schema": {
-    #         "type": "object",
-    #         "properties": {
-    #             "device_data": {
-    #                 "type": "object",
-    #                 "description": "Словарь с id устройства и полями для обновления",
-    #                 "properties": {
-    #                     "id": {"type": "integer", "description": "id устройства (первичный ключ)"},
-    #                     "status": {
-    #                         "type": "string",
-    #                         "enum": ["available", "busy", "disabled", "maintenance"],
-    #                         "description": "Новый статус устройства"
-    #                     },
-    #                     "location": {"type": ["string", "null"], "description": "Локация устройства"},
-    #                     "comment": {"type": ["string", "null"], "description": "Комментарий"},
-    #                     "hidden": {"type": "boolean", "description": "Скрыт или нет для работы (true/false)"},
-    #                     "device_persona": {"type": ["string", "null"], "description": "Профиль личности устройства"}
-    #                 },
-    #                 "required": ["id"]
-    #             }
-    #         },
-    #         "required": ["device_data"]
     #     }
     # }
 

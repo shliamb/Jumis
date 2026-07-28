@@ -1,6 +1,6 @@
 # Главные рабочие инструменты
 litellm==1.93.0
-aiogram==3.26.0
+aiogram==3.29.1
 telethon==1.42.0
 
 # Работа с базой данных PostgreSQL
@@ -14,6 +14,7 @@ aiohttp-socks==0.8.4
 # Парсинг (если используешь напрямую в коде)
 lxml==5.3.0
 numpy==2.5.1
+markdown==3.10.2
 
 # Звук
 cffi==2.1.0
@@ -22,7 +23,8 @@ soundfile==0.14.0
 
 # В ручную:
 # uv pip install kairos-asr[gpu]
-# pip install sentence-transformers
+# uv pip install sentence-transformers
+# uv pip install markdown
 
 
 # Везде добавляю uv
@@ -30,7 +32,7 @@ soundfile==0.14.0
 # uv pip tree
 
 
-
+# uv pip install aiogram==3.29.1 - обновить если что
 
 
 
