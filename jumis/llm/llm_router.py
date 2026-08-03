@@ -28,7 +28,7 @@ litellm.callbacks = [DBTokenLogger()]       # Регистрируем клас�
 
 
 class LLMWorker:
-    def __init__(self, db_memory):
+    def __init__(self, db_memory, db_users):
         ''' Экземпляр работы с LLM через litellm '''
         
         # Проверяем наличие ключей в окружении (не вызовет KeyError, если какого-то ключа пока нет)
@@ -47,6 +47,7 @@ class LLMWorker:
         self.tool_choice = "auto"
 
         self.db_memory = db_memory
+        self.db_users = db_users
 
     def _check_env_keys(self):
         """ Безопасная проверка загрузки API-ключей из .env """
@@ -72,18 +73,6 @@ class LLMWorker:
             ]
         )
 
-    # Позже доделаем память для каждого диалога с пользователем своя + векторизируем..
-    # async def load_memories(self):
-    #     """ Выгрузка воспоминаний из базы """
-    #     try:
-    #         memories_list = await load_memories()
-    #         if memories_list:
-    #             return "\n".join(memories_list)
-            
-    #     except Exception as e:
-    #         print(f"Ошибка загрузки памяти: {e}")
-    #         self.memories = []
-        
 
     async def get_tools_for_agent(self, function_names: list) -> list:
         """Формирует tools из self.functions с динамической подстановкой категорий"""
@@ -96,12 +85,12 @@ class LLMWorker:
             else ["fact"]
         )
 
-        # 2. (На будущее) Достаем категории КЛИЕНТОВ
-        # client_category_names = (
-        #     [c["name"] for c in self.db_memory.client_categories] 
-        #     if hasattr(self.db_memory, 'client_categories') and self.db_memory.client_categories 
-        #     else ["default"]
-        # )
+        # 2. Достаем категории users_categories
+        client_category_names = (
+            [c["name"] for c in self.db_users.client_categories] 
+            if hasattr(self.db_users, 'client_categories') and self.db_users.client_categories 
+            else ["default"]
+        )
 
         for func_name in function_names:
             if func_name in self.functions:
@@ -121,9 +110,9 @@ class LLMWorker:
                 if "facts_category" in properties:
                     properties["facts_category"]["enum"] = fact_category_names
 
-                # --- (На будущее) Подстановка категорий КЛИЕНТОВ ---
-                # if "client_category" in properties:
-                #     properties["client_category"]["enum"] = client_category_names
+                # --- Подстановка категорий ПОЛЬЗОВАТЕЛЕЙ ---
+                if "client_category" in properties:
+                    properties["client_category"]["enum"] = client_category_names
 
                 tools.append({
                     "type": "function",

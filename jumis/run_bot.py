@@ -11,6 +11,7 @@ from python_socks._errors import ProxyError
 from utils.serialize import serialize_for_json
 from llm.llm_router import LLMWorker
 from database.memories import DBMemories
+from database.users import DBUsers
 
 
 import logging
@@ -70,15 +71,27 @@ async def main_bot() -> None:
         await db_memory.init()
         print("Инициализация памяти успешно прошла")
     except:
-        print("База не инициализирована")
+        print("База памяти не инициализирована")
+
+    # Инициализация пользователей (загружает категории в кэш self)
+    db_users = DBUsers()
+    try:
+        await db_users.init()
+        print("Инициализация пользователей успешно прошла")
+    except:
+        print("База пользователей не инициализирована")
+
+    dp["db_users"] = db_users 
+
 
     # Инициализация LLM Воркера и передача в aiogram workflow_data
-    llm = LLMWorker(db_memory=db_memory)
+    llm = LLMWorker(db_memory=db_memory, db_users=db_users)
     dp["llm"] = llm  # Доступен во всех хэндлерах через `dp` или контекст
 
-    # Проверим динамическое получение категорий фактов:
-    test_tools = await llm.get_tools_for_agent(["write_fact"])
-    print("Сгенерированный enum:", test_tools[0]["function"]["parameters"]["properties"]["facts_category"].get("enum"))
+
+    # # Проверим динамическое получение категорий фактов:
+    # test_tools = await llm.get_tools_for_agent(["write_fact"])
+    # print("Сгенерированный enum:", test_tools[0]["function"]["parameters"]["properties"]["facts_category"].get("enum"))
 
     # Создание бота и подключение роутеров
     await bot_instance.create_bot()

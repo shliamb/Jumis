@@ -42,6 +42,7 @@ async def add_category_facts(name: str, description: str = "", db_memory=None) -
         return f"Failed to create category '{name}'."
 
 
+
 async def get_categories_facts(db_memory=None) -> str:
     """Форматирует список категорий фактов в удобный для LLM текст"""
     if not db_memory:
@@ -612,9 +613,6 @@ async def get_users() -> str:
 
 
 
-
-
-
 async def get_user(
     user_id: int | None = None,
     tg_id: int | None = None,
@@ -685,9 +683,6 @@ async def get_user(
     lines.append(f"• Registered: {date_str}")
 
     return "\n".join(lines)
-
-
-
 
 
 
