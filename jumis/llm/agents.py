@@ -53,12 +53,22 @@ AGENTS = {
 
         ),
         "tools": [
+            # DATE
             "get_date",
-            
-            "write_fact",
-            "facts_by_cat",
-            "facts_by_user",
 
+            # CATEGORIES FACTS
+            "get_categories_facts", # Для теста, ИИ и так знает категории из tools
+            "add_category_facts",
+
+            # FACTS
+            "write_fact",
+            "update_fact",
+            "del_fact",
+            "search_facts",
+            # "facts_by_cat",
+            # "facts_by_user",
+
+            # USERS
             "get_users",
             "get_user",
             "update_user"

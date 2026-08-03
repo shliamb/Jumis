@@ -18,14 +18,35 @@ def create_tables_in_db():
 
 
         create_pgvector = '''
-        -- 1. Включаем расширение pgvector (выполнить 1 раз)
+        -- Включаем расширение pgvector (выполнить 1 раз)
         CREATE EXTENSION IF NOT EXISTS vector;
         '''
         cursor.execute(create_pgvector)
 
 
+        create_table_users_categories = '''
+        CREATE TABLE IF NOT EXISTS users_categories (
+            id SERIAL PRIMARY KEY,
+            name VARCHAR(50) UNIQUE NOT NULL,    -- not_defined, client, friend, spam, family, lead, partner
+            description TEXT,                    -- описание для понимания LLM
+            created_at TIMESTAMP DEFAULT NOW()
+        );
+
+        -- Базовый набор категорий пользователей с понятным описанием для LLM
+        INSERT INTO users_categories (name, description) VALUES
+            ('not_defined', 'Новый или неидентифицированный контакт, статус не определен'),
+            ('client', 'Клиент по ремонту, покупке запчастей или согласованию работ'),
+            ('friend', 'Друг или хорошая личный знакомый'),
+            ('family', 'Член семьи или близкий родственник'),
+            ('partner', 'Коллега, поставщик запчастей или бизнес-партнер'),
+            ('spam', 'Заблокированный спамер, бот или нежелательный контакт')
+        ON CONFLICT (name) DO NOTHING;
+        '''
+        cursor.execute(create_table_users_categories)
+
+
         create_table_users = '''
-        -- 2. Таблица пользователей
+        -- Таблица пользователей
         CREATE TABLE IF NOT EXISTS users (
             id SERIAL PRIMARY KEY,
             tg_id BIGINT UNIQUE,                           -- Telegram ID (может быть NULL, пока не отправили первое сообщение)
@@ -33,7 +54,8 @@ def create_tables_in_db():
             full_name VARCHAR(250),                        -- Имя + Фамилия из профиля Telegram
             phone VARCHAR(50),                             -- Телефон (если поделится контактом)
             
-            category VARCHAR(100),                         -- Категория (например: client, friend, spam)
+            category VARCHAR(50) DEFAULT 'not_defined' REFERENCES users_categories(name) ON UPDATE CASCADE ON DELETE SET DEFAULT,
+            
             comment TEXT,                                  -- Твоя личная ручная заметка о человеке
             summary TEXT,                                  -- Краткая выжимка диалога от ИИ для быстрого контекста
             
@@ -51,6 +73,11 @@ def create_tables_in_db():
             created_at TIMESTAMP DEFAULT NOW(),            -- Дата первого контакта
             updated_at TIMESTAMP DEFAULT NOW()             -- Дата любого изменения профиля
         );
+
+        -- Индексы для моментального поиска по tg_id и категориям
+        CREATE INDEX IF NOT EXISTS idx_users_tg_id ON users(tg_id);
+        CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
+        CREATE INDEX IF NOT EXISTS idx_users_category ON users(category);
         '''
         cursor.execute(create_table_users)
 
@@ -83,26 +110,43 @@ def create_tables_in_db():
         cursor.execute(create_table_messages)
 
 
+        create_table_facts_categories = '''
+        CREATE TABLE IF NOT EXISTS facts_categories (
+            id SERIAL PRIMARY KEY,
+            name VARCHAR(50) UNIQUE NOT NULL,    -- fact, preference, hardware, agreement
+            description TEXT,                    -- описание для понимания LLM
+            created_at TIMESTAMP DEFAULT NOW()
+        );
+
+        -- Наполняем дефолтными категориями, если их еще нет (ON CONFLICT DO NOTHING)
+        INSERT INTO facts_categories (name, description) VALUES
+            ('fact', 'Общие факты о пользователе или системе'),
+            ('preference', 'Предпочтения, привычки и пожелания клиента'),
+            ('hardware', 'Железо, спецификации, ремонты, запчасти'),
+            ('agreement', 'Договоренности, цены, сроки и статусы заказов')
+        ON CONFLICT (name) DO NOTHING;
+        '''
+        cursor.execute(create_table_facts_categories)
+
+
         create_table_memories = '''
-        -- 4. Таблица Долговременной Памяти / Фактов (RAG)
         CREATE TABLE IF NOT EXISTS memories (
             id SERIAL PRIMARY KEY,
-            
-            -- Привязка: Если user_id указан — это факт о КОНКРЕТНОМ клиенте.
-            -- Если user_id IS NULL — это ГЛОБАЛЬНАЯ память Jumis (твои личные инструкции, правила, контекст)
             user_id INT REFERENCES users(id) ON DELETE CASCADE,
             
-            category VARCHAR(50) DEFAULT 'fact',           -- fact, preference, hardware, agreement
-            content TEXT NOT NULL,                         -- Сухой факт ("Залит ноутбук K53, согласован ремонт до 5000р")
+            -- Внешняя связь сразу на facts_categories(name)
+            category VARCHAR(50) DEFAULT 'fact' REFERENCES facts_categories(name) ON UPDATE CASCADE ON DELETE SET DEFAULT,
             
-            embedding VECTOR(768),                         -- Вектор факта для локального поиска
+            content TEXT NOT NULL,
+            embedding VECTOR(768),
             
             created_at TIMESTAMP DEFAULT NOW(),
             updated_at TIMESTAMP DEFAULT NOW()
         );
 
-        -- Индексы для таблицы памяти
+        -- Индексы
         CREATE INDEX IF NOT EXISTS idx_memories_user_id ON memories(user_id);
+        CREATE INDEX IF NOT EXISTS idx_memories_category ON memories(category);
         CREATE INDEX IF NOT EXISTS idx_memories_embedding ON memories USING hnsw (embedding vector_cosine_ops);
         '''
         cursor.execute(create_table_memories)

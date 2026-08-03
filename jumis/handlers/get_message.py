@@ -482,6 +482,8 @@ async def handle_message(message: types.Message, bot: Bot, llm):
         await message.answer("Этот тип сообщения не поддерживается.")
         return
 
+
+
     # =========================================================================
     # БЛОК РАБОТЫ С LLM И ИНТЕРАКТИВОМ
     # =========================================================================
@@ -516,7 +518,6 @@ async def handle_message(message: types.Message, bot: Bot, llm):
                             buffer = ""
                             continue
 
-                        # Внутренние "мягкие" ошибки Telegram при стриме ловим локально
                         try:
                             await bot.edit_message_text(
                                 chat_id=message.chat.id,
@@ -531,9 +532,7 @@ async def handle_message(message: types.Message, bot: Bot, llm):
                             await asyncio.sleep(e.retry_after)
                             last_update_time = time.time()
                         except TelegramBadRequest as e:
-                            if "can't parse entities" in str(e):
-                                pass
-                            else:
+                            if "can't parse entities" not in str(e):
                                 logger.error(f"Ошибка ТГ при стриминге: {e}")
                         except TelegramAPIError as e:
                             logger.error(f"Общая ошибка ТГ при стриминге: {e}")
@@ -549,6 +548,7 @@ async def handle_message(message: types.Message, bot: Bot, llm):
 
             # 2. ВЫЗОВ ФУНКЦИЙ (ТУЛЗОВ)
             if has_tool_calls:
+                # Тут пустой stream_text — это НОРМАЛЬНО, модель молча вызвала функцию
                 tool_calls_for_msg = []
                 for tc in tool_calls_info:
                     tool_calls_for_msg.append({
@@ -583,6 +583,28 @@ async def handle_message(message: types.Message, bot: Bot, llm):
 
             # 3. ФИНАЛЬНЫЙ ОТВЕТ
             else:
+                # 🔥 ПЕРВАЯ ЛОВУШКА: Защита от пустого ответа без тулзов
+                if not stream_text.strip():
+                    logger.warning("LLM вернула пустой ответ. Применяем инъекцию в память.")
+                    
+                    # 1. Записываем в контекст пояснение для модели на английском (чтобы она не сошла с ума)
+                    fallback_context = "[System Note: The LLM API returned an empty string. The user was notified about the network/API glitch. Be ready to answer their previous question if they ask again.]"
+                    await llm.add_assistant_message(content=fallback_context)
+                    
+                    # 2. Уведомляем пользователя (Не шлем пустой ответ в Телеграм!)
+                    user_alert = "⚠️ Нейросеть задумалась и не смогла выдать ответ из-за сбоя API. Я уже записал это в память, просто повтори вопрос или напиши 'продолжи'."
+                    try:
+                        await bot.edit_message_text(
+                            chat_id=message.chat.id,
+                            message_id=msg.message_id,
+                            text=user_alert
+                        )
+                    except Exception:
+                        await message.answer(user_alert)
+                    
+                    break # Выходим из цикла, всё спасено
+
+                # ✅ Если всё ок, стандартная логика
                 await llm.add_assistant_message(content=stream_text)
                 full_text += stream_text
                 
@@ -601,13 +623,19 @@ async def handle_message(message: types.Message, bot: Bot, llm):
         logger.error(f"ФАТАЛЬНАЯ ОШИБКА в логике LLM: {e}")
         logger.error(traceback.format_exc())
 
+        # 🔥 ВТОРАЯ ЛОВУШКА: Если API вообще крашнулось, закрываем вопрос пользователя заглушкой
+        try:
+            crash_note = f"[System Note: API connection crashed with error '{type(e).__name__}'. No response was generated.]"
+            await llm.add_assistant_message(content=crash_note)
+        except Exception:
+            pass # Если и тут крашнется, ну и ладно
+
         error_msg = (
             "⚠️ **Произошла ошибка при генерации ответа.**\n\n"
             f"**Тип:** `{type(e).__name__}`\n"
             f"**Детали:** `{str(e)}`"
         )
 
-        # Если сообщение "..." уже создано — меняем его текст на ошибку
         if msg:
             try:
                 await bot.edit_message_text(
@@ -620,196 +648,166 @@ async def handle_message(message: types.Message, bot: Bot, llm):
                 logger.error(f"Не удалось отредактировать заглушку ошибкой: {edit_err}")
                 await message.answer(error_msg, parse_mode="Markdown")
         else:
-            # Если упало еще до создания заглушки
             await message.answer(error_msg, parse_mode="Markdown")
 
 
 
 
-# @router.message()
-# async def handle_message(message: types.Message, bot: Bot, llm):
-#     user_id = message.from_user.id
-#     if not await rights_verification(user_id, message.from_user.language_code, message):
-#         return
-    
-#     message_text = None
 
-#     # Обработка разных типов сообщений
-#     if message.content_type == "voice":
-#         file_id = message.voice.file_id
-        
-#         file = None
-#         # Пробуем получить файл до 3 раз при сетевых сбоях
-#         for attempt in range(1, 4):
-#             try:
-#                 file = await bot.get_file(file_id)
-#                 break  # Если успешно — вылетаем из цикла ретраев
-#             except Exception as e:
-#                 logger.warning(f"Сетевой сбой при get_file (попытка {attempt}/3): {e}")
-#                 if attempt == 3:
-#                     await message.answer("❌ Проблемы со связью. Не удалось загрузить голосовое, попробуй еще раз.")
-#                     return
-#                 await asyncio.sleep(1.5)  # Даем сети «отвиснуть» перед повтором
 
-#         # Точно так же страхуем само скачивание байт
-#         audio_bytes = None
-#         for attempt in range(1, 4):
-#             try:
-#                 audio_bytes = await bot.download_file(file.file_path)
-#                 break
-#             except Exception as e:
-#                 logger.warning(f"Сетевой сбой при download_file (попытка {attempt}/3): {e}")
-#                 if attempt == 3:
-#                     await message.answer("❌ Ошибка скачивания аудиофайла из-за сетевого сбоя.")
-#                     return
-#                 await asyncio.sleep(1.5)
 
-#         message_text = await stt.transcribe(audio_bytes.read(), ".ogg")
 
-#         MAX_LEN = 4096
-#         prefix = "🎤 Распознано:\n"
-#         max_text_len = MAX_LEN - len(prefix) - 3  # запас на "..."
-#         trimmed = message_text[:max_text_len]
-#         if len(message_text) > max_text_len:
-#             trimmed += "..."
-#         await message.answer(f"{prefix}{trimmed}")
 
-#     elif message.content_type == "text":
-#         message_text = message.text
 
-#     elif message.content_type == "video_note":
-#         await message.answer("Видеосообщения пока не поддерживаются.")
-#         return
-    
-#     elif message.content_type == "photo":
-#         await message.answer("Фото пока не обрабатываются.")
-#         return
-    
-#     elif message.content_type == "document":
-#         await message.answer("Документы пока не принимаются.")
-#         return
-    
-#     else:
-#         await message.answer("Этот тип сообщения не поддерживается.")
-#         return
-        
 
-#     system, tools = await llm.get_tools("general_agent")
-#     msg = await message.answer("...")
 
-#     # Добавляем сообщение пользователя в историю диалога
-#     await llm.add_user_message(message_text)
 
-#     full_text = ""          # накопленный текст за всё время (для финального сообщения)
-#     buffer = ""
-#     last_update_time = 0    # Трекер времени последнего апдейта ТГ
 
-#     while True:
-#         tool_calls_info = []      # [{id, name, arguments}, ...]
-#         has_tool_calls = False
-#         stream_text = ""
 
-#         async for chunk in llm.refine_stream_tools(question=None, system=system, tools=tools):
-#             if chunk['type'] == 'text':
-#                 stream_text += chunk['content']
-#                 buffer += chunk['content']
+
+
+
+
+
+    # # =========================================================================
+    # # БЛОК РАБОТЫ С LLM И ИНТЕРАКТИВОМ
+    # # =========================================================================
+    # msg = None
+    # try:
+    #     system, tools = await llm.get_tools("general_agent")
+    #     msg = await message.answer("...")
+
+    #     # Добавляем сообщение пользователя в историю диалога
+    #     await llm.add_user_message(message_text)
+
+    #     full_text = ""          
+    #     buffer = ""
+    #     last_update_time = 0    
+
+    #     while True:
+    #         tool_calls_info = []      
+    #         has_tool_calls = False
+    #         stream_text = ""
+
+    #         # 1. СТРИМИНГ ОТВЕТА ОТ LLM
+    #         async for chunk in llm.refine_stream_tools(question=None, system=system, tools=tools):
+    #             if chunk['type'] == 'text':
+    #                 stream_text += chunk['content']
+    #                 buffer += chunk['content']
+                    
+    #                 current_time = time.time()
+    #                 current_text = full_text + stream_text
+    #                 if len(buffer.strip()) > 5 and (current_time - last_update_time) >= 1.5:
+
+    #                     if len(current_text) > 4000:
+    #                         buffer = ""
+    #                         continue
+
+    #                     # Внутренние "мягкие" ошибки Telegram при стриме ловим локально
+    #                     try:
+    #                         await bot.edit_message_text(
+    #                             chat_id=message.chat.id,
+    #                             message_id=msg.message_id,
+    #                             text=current_text,
+    #                             parse_mode=None
+    #                         )
+    #                         last_update_time = current_time
+    #                         buffer = ""
+    #                     except TelegramRetryAfter as e:
+    #                         logger.warning(f"Словили флуд внутри стрима. Спим {e.retry_after} сек.")
+    #                         await asyncio.sleep(e.retry_after)
+    #                         last_update_time = time.time()
+    #                     except TelegramBadRequest as e:
+    #                         if "can't parse entities" in str(e):
+    #                             pass
+    #                         else:
+    #                             logger.error(f"Ошибка ТГ при стриминге: {e}")
+    #                     except TelegramAPIError as e:
+    #                         logger.error(f"Общая ошибка ТГ при стриминге: {e}")
+
+    #             elif chunk['type'] == 'tool':
+    #                 for tool_id, tool in chunk['data'].items():
+    #                     tool_calls_info.append({
+    #                         'id': tool_id,
+    #                         'name': tool['name'],
+    #                         'arguments': tool['arguments']
+    #                     })
+    #                     has_tool_calls = True
+
+    #         # 2. ВЫЗОВ ФУНКЦИЙ (ТУЛЗОВ)
+    #         if has_tool_calls:
+    #             tool_calls_for_msg = []
+    #             for tc in tool_calls_info:
+    #                 tool_calls_for_msg.append({
+    #                     "id": tc['id'],
+    #                     "type": "function",
+    #                     "function": {
+    #                         "name": tc['name'],
+    #                         "arguments": tc['arguments']
+    #                     }
+    #                 })
+    #             await llm.add_assistant_message(content=stream_text, tool_calls=tool_calls_for_msg)
+    #             full_text += stream_text + "\n"
                 
-#                 # Стримим в ТГ только если накопился текст И прошло больше 1.5 секунд с прошлого апдейта
-#                 current_time = time.time()
-#                 current_text = full_text + stream_text
-#                 if len(buffer.strip()) > 5 and (current_time - last_update_time) >= 1.5:
+    #             try:
+    #                 await bot.edit_message_text(
+    #                     chat_id=message.chat.id,
+    #                     message_id=msg.message_id,
+    #                     text=full_text + "🔧 Запускаю функцию..."
+    #                 )
+    #                 last_update_time = time.time()
+    #             except Exception:
+    #                 pass
 
-#                     # Защита от лимита Telegram во время стриминга
-#                     if len(current_text) > 4000:
-#                         # Текст слишком большой для одного сообщения. 
-#                         # Просто копим буфер в фоне и ждем финальной отправки (send_jumis_response)
-#                         buffer = ""
-#                         continue
+    #             for tc in tool_calls_info:
+    #                 args = json.loads(tc['arguments']) if isinstance(tc['arguments'], str) else tc['arguments']
+    #                 result = await llm.call_function(tc['name'], args)
+    #                 result_str = json.dumps(result, ensure_ascii=False) if result is not None else "ok"
+    #                 await llm.add_tool_response(tc['id'], result_str)
 
-#                     try:
-#                         await bot.edit_message_text(
-#                             chat_id=message.chat.id,
-#                             message_id=msg.message_id,
-#                             text=current_text,
-#                             parse_mode=None  # <-- Чистый текст без HTML
-#                         )
+    #             llm._safe_trim()
+    #             continue
 
-#                         last_update_time = current_time
-#                         buffer = ""
-#                     except TelegramRetryAfter as e:
-#                         # Если всё-таки превысили лимит — просто спим и пропускаем этот тик, не падая
-#                         logger.warning(f"Словили флуд внутри стрима. Спим {e.retry_after} сек.")
-#                         await asyncio.sleep(e.retry_after)
-#                         last_update_time = time.time()
-#                     except TelegramBadRequest as e:
-#                         # Если ТГ всё равно ругается на разметку (например, нейросеть внутри <pre> 
-#                         # написала что-то странное), мы просто пропускаем кадр.
-#                         # В консоль это больше СРАТЬ НЕ БУДЕТ.
-#                         if "can't parse entities" in str(e):
-#                             pass
-#                         else:
-#                             # А вот критические ошибки (например, юзер заблокировал бота) — пишем в лог
-#                             logger.error(f"Критическая ошибка ТГ при стриминге: {e}")
-#                     except TelegramAPIError as e:
-#                         logger.error(f"Общая ошибка ТГ при стриминге: {e}")
+    #         # 3. ФИНАЛЬНЫЙ ОТВЕТ
+    #         else:
+    #             await llm.add_assistant_message(content=stream_text)
+    #             full_text += stream_text
+                
+    #             await send_jumis_response(
+    #                 bot=bot,
+    #                 chat_id=message.chat.id,
+    #                 message_id=msg.message_id,
+    #                 llm_response=full_text
+    #             )
+    #             break
 
-#             elif chunk['type'] == 'tool':
-#                 for tool_id, tool in chunk['data'].items():
-#                     tool_calls_info.append({
-#                         'id': tool_id,
-#                         'name': tool['name'],
-#                         'arguments': tool['arguments']
-#                     })
-#                     has_tool_calls = True
+    # # =========================================================================
+    # # ГЛОБАЛЬНЫЙ СПАСАТЕЛЬНЫЙ КРУГ ДЛЯ ОШИБОК LLM / API / ФУНКЦИЙ
+    # # =========================================================================
+    # except Exception as e:
+    #     logger.error(f"ФАТАЛЬНАЯ ОШИБКА в логике LLM: {e}")
+    #     logger.error(traceback.format_exc())
 
-#         # Если были вызовы функций
-#         if has_tool_calls:
-#             tool_calls_for_msg = []
-#             for tc in tool_calls_info:
-#                 tool_calls_for_msg.append({
-#                     "id": tc['id'],
-#                     "type": "function",
-#                     "function": {
-#                         "name": tc['name'],
-#                         "arguments": tc['arguments']
-#                     }
-#                 })
-#             await llm.add_assistant_message(content=stream_text, tool_calls=tool_calls_for_msg)
-#             full_text += stream_text + "\n"
-            
-#             # Рендерим промежуточный статус перед вызовом тулзы
-#             try:
-#                 await bot.edit_message_text(
-#                     chat_id=message.chat.id,
-#                     message_id=msg.message_id,
-#                     text=full_text + "🔧 Запускаю функцию..."
-#                 )
-#                 last_update_time = time.time()
-#             except Exception:
-#                 pass
+    #     error_msg = (
+    #         "⚠️ **Произошла ошибка при генерации ответа.**\n\n"
+    #         f"**Тип:** `{type(e).__name__}`\n"
+    #         f"**Детали:** `{str(e)}`"
+    #     )
 
-#             # Выполняем функции
-#             for tc in tool_calls_info:
-#                 args = json.loads(tc['arguments']) if isinstance(tc['arguments'], str) else tc['arguments']
-#                 result = await llm.call_function(tc['name'], args)
-#                 result_str = json.dumps(result, ensure_ascii=False) if result is not None else "ok"
-#                 await llm.add_tool_response(tc['id'], result_str)
+    #     # Если сообщение "..." уже создано — меняем его текст на ошибку
+    #     if msg:
+    #         try:
+    #             await bot.edit_message_text(
+    #                 chat_id=message.chat.id,
+    #                 message_id=msg.message_id,
+    #                 text=error_msg,
+    #                 parse_mode="Markdown"
+    #             )
+    #         except Exception as edit_err:
+    #             logger.error(f"Не удалось отредактировать заглушку ошибкой: {edit_err}")
+    #             await message.answer(error_msg, parse_mode="Markdown")
+    #     else:
+    #         # Если упало еще до создания заглушки
+    #         await message.answer(error_msg, parse_mode="Markdown")
 
-#             llm._safe_trim()
-#             continue
-
-
-#         # Нет вызовов функций — ФИНАЛЬНЫЙ ОТВЕТ
-#         else:
-#             await llm.add_assistant_message(content=stream_text)
-#             full_text += stream_text
-            
-#             # Финальный красивый рендер с включенным parse_mode="HTML"
-#             await send_jumis_response(
-#                 bot=bot,
-#                 chat_id=message.chat.id,
-#                 message_id=msg.message_id,  # ID сообщения-заглушки
-#                 llm_response=full_text       # Ответ от LLM
-#             )
-#             break
 

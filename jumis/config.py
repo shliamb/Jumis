@@ -31,10 +31,13 @@ PATH_JSON = "/jumis/json/" if DOCKER else "jumis/json"
 #### LLMs: ####
 
 # DeepSeek:
-MODEL_DS = "deepseek-chat" #  deepseek-reasoner   deepseek-r1   deepseek-chat - V3   deepseek-vl deepseek-v4-pro deepseek-v4-flash
+# MODEL_DS = "deepseek-chat" #  deepseek-reasoner   deepseek-r1   deepseek-chat - V3   deepseek-vl deepseek-v4-pro deepseek-v4-flash
 TIMEOUT = (5.0, 30.0)
-HISTORY_LIMIT = 20
-USE_MEM = True
+HISTORY_LIMIT = 30
+""" 10–15 Строгие узкие ассистенты (только выполнить команду и дать ответ).
+    20–30 Идеальный диапазон для Юмис. Естественный разговор + активный тулинг.
+    50+ Оверкост, высокая задержка (latency) и риск путаницы в цепочках tool_calls."""
+# USE_MEM = True
 
 
 #### KEYS: ####

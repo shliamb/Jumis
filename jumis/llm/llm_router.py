@@ -1,5 +1,6 @@
 #! jumis/llm/llm_router.py (или deepseek.py)
 import os
+import copy
 import asyncio
 import litellm
 from litellm import acompletion
@@ -10,9 +11,8 @@ import json
 
 from llm.agents import AGENTS
 from llm.functions import FUNCTIONS
-from config import HISTORY_LIMIT, USE_MEM
+from config import HISTORY_LIMIT
 from llm.token_usege import DBTokenLogger
-# from database.memories import load_memories
 
 # Подгружаем переменные окружения
 load_dotenv('.env.llm')
@@ -28,7 +28,7 @@ litellm.callbacks = [DBTokenLogger()]       # Регистрируем клас�
 
 
 class LLMWorker:
-    def __init__(self):
+    def __init__(self, db_memory):
         ''' Экземпляр работы с LLM через litellm '''
         
         # Проверяем наличие ключей в окружении (не вызовет KeyError, если какого-то ключа пока нет)
@@ -41,12 +41,12 @@ class LLMWorker:
         # "xai/grok-3-latest"
         self.default_model = "deepseek/deepseek-v4-flash"
         self.dialog: List[Dict[str, Any]] = []
-        self.memories: List[str] = []
-        self.use_mem = USE_MEM
         self.history_limit = HISTORY_LIMIT
         self.functions = FUNCTIONS
         self.agents = AGENTS
         self.tool_choice = "auto"
+
+        self.db_memory = db_memory
 
     def _check_env_keys(self):
         """ Безопасная проверка загрузки API-ключей из .env """
@@ -85,17 +85,45 @@ class LLMWorker:
     #         self.memories = []
         
 
-
     async def get_tools_for_agent(self, function_names: list) -> list:
-        """ Формирует tools из FUNCTIONS в functions.py"""
+        """Формирует tools из self.functions с динамической подстановкой категорий"""
         tools = []
+
+        # 1. Достаем категории ФАКТОВ из db_memory
+        fact_category_names = (
+            [c["name"] for c in self.db_memory.fact_categories] 
+            if self.db_memory.fact_categories 
+            else ["fact"]
+        )
+
+        # 2. (На будущее) Достаем категории КЛИЕНТОВ
+        # client_category_names = (
+        #     [c["name"] for c in self.db_memory.client_categories] 
+        #     if hasattr(self.db_memory, 'client_categories') and self.db_memory.client_categories 
+        #     else ["default"]
+        # )
+
         for func_name in function_names:
             if func_name in self.functions:
                 func_info = self.functions[func_name]
                 
-                # Поддержка формата, если функция зарегистрирована словарём или через callable
-                description = func_info.get("description", "") if isinstance(func_info, dict) else getattr(func_info, "__doc__", "")
-                schema = func_info.get("schema", {}) if isinstance(func_info, dict) else {}
+                description = (
+                    func_info.get("description", "") 
+                    if isinstance(func_info, dict) 
+                    else getattr(func_info, "__doc__", "")
+                )
+                
+                raw_schema = func_info.get("schema", {}) if isinstance(func_info, dict) else {}
+                schema = copy.deepcopy(raw_schema)
+                properties = schema.get("properties", {})
+
+                # --- Подстановка категорий ФАКТОВ ---
+                if "facts_category" in properties:
+                    properties["facts_category"]["enum"] = fact_category_names
+
+                # --- (На будущее) Подстановка категорий КЛИЕНТОВ ---
+                # if "client_category" in properties:
+                #     properties["client_category"]["enum"] = client_category_names
 
                 tools.append({
                     "type": "function",
@@ -105,72 +133,65 @@ class LLMWorker:
                         "parameters": schema
                     }
                 })
+
         return tools
-    
-
-    async def call_function(self, func_name: str, arguments: dict):
-        """ Вызывает зарегистрированную функцию с переданными аргументами.
-            Автоматически передаёт llm, если функция их ожидает.
-            Поддерживает два формата регистрации:
-            - прямая функция (callable)
-            - словарь с ключом 'function' (для сложных случаев с описанием)
-        """
-        entry = self.functions.get(func_name)
-        if entry is None:
-            return {"error": f"Function '{func_name}' not found"}
-
-        # Определяем вызываемый объект
-        if callable(entry):
-            func = entry
-        elif isinstance(entry, dict) and 'function' in entry:
-            func = entry['function']
-        else:
-            return {"error": f"Invalid registration for function '{func_name}': {type(entry)}"}
-
-        try:
-            sig = inspect.signature(func)
-            call_kwargs = dict(arguments)  # копируем аргументы
-
-            # Автоматически добавляем llm, если функция его принимает
-            if 'llm' in sig.parameters:
-                call_kwargs['llm'] = self
-
-            # Вызов в зависимости от типа функции (async/sync)
-            if inspect.iscoroutinefunction(func):
-                return await func(**call_kwargs)
-            else:
-                return func(**call_kwargs)
-
-        except Exception as e:
-            return {"error": f"Function '{func_name}' failed: {str(e)}"}
-
 
 
     async def get_tools(self, agent: str = "general_agent") -> tuple:
-        """ Получает системный промпт и tools для указанного агента. """
-        try:
-            # Берем локальную копию промпта, чтобы случайно не испортить оригинал
-            system = self.agents[agent]["system"]
-            function_names = self.agents[agent].get("tools", [])
-            tools = await self.get_tools_for_agent(function_names)
-            
-            if not self.use_mem:
+            """ Получает системный промпт и tools для указанного агента """
+            try:
+                system = self.agents[agent]["system"]
+                function_names = self.agents[agent].get("tools", [])
+                tools = await self.get_tools_for_agent(function_names)
+                
                 return system, tools
             
-            return system, tools
-        
-        except KeyError as e:
-            raise KeyError(f"Агент '{agent}' не найден. Доступные агенты: {list(self.agents.keys())}") from e
+            except KeyError as e:
+                raise KeyError(f"Агент '{agent}' не найден. Доступные агенты: {list(self.agents.keys())}") from e
+                    
+                    # Позже доделаем память для каждого диалога с пользователем своя + векторизируем..
+                    # # Намертво изолируем воспоминания только для главного агента
+                    # if agent == "general_agent":
+                    #     memories = await self.load_memories()
+                    #     if memories:
+                    #         system = f"{system.rstrip()}\n\n**Важные воспоминания агента:**\n{memories}"
+                            
 
-                
-                # Позже доделаем память для каждого диалога с пользователем своя + векторизируем..
-                # # Намертво изолируем воспоминания только для главного агента
-                # if agent == "general_agent":
-                #     memories = await self.load_memories()
-                #     if memories:
-                #         system = f"{system.rstrip()}\n\n**Важные воспоминания агента:**\n{memories}"
-                        
+    async def call_function(self, func_name: str, arguments: dict):
+            """ Вызывает зарегистрированную функцию с переданными аргументами.
+                Автоматически передаёт  db_memory, если функция их ожидает.
+                Поддерживает два формата регистрации:
+                - прямая функция (callable)
+                - словарь с ключом 'function' (для сложных случаев с описанием)
+            """
+            entry = self.functions.get(func_name)
+            if entry is None:
+                return {"error": f"Function '{func_name}' not found"}
 
+            # Определяем вызываемый объект
+            if callable(entry):
+                func = entry
+            elif isinstance(entry, dict) and 'function' in entry:
+                func = entry['function']
+            else:
+                return {"error": f"Invalid registration for function '{func_name}': {type(entry)}"}
+
+            try:
+                sig = inspect.signature(func)
+                call_kwargs = dict(arguments)  # копируем аргументы
+
+                # Автоматически подставляем db_memory, если функция ждёт напрямую память
+                if 'db_memory' in sig.parameters:
+                    call_kwargs['db_memory'] = self.db_memory
+
+                # Вызов в зависимости от типа функции (async/sync)
+                if inspect.iscoroutinefunction(func):
+                    return await func(**call_kwargs)
+                else:
+                    return func(**call_kwargs)
+
+            except Exception as e:
+                return {"error": f"Function '{func_name}' failed: {str(e)}"}
 
 
     async def get_agent_info(self, agent: str) -> dict:
@@ -178,9 +199,6 @@ class LLMWorker:
         agent_config = self.agents[agent].copy()  # Копируем, чтобы не менять оригинал
         agent_config["tools_for_api"] = await self.get_tools_for_agent(agent_config.get("tools", []))
         return agent_config
-
-
-
 
 
     async def _call_request(
@@ -257,36 +275,60 @@ class LLMWorker:
 
 
     def _safe_trim(self):
-        """Обрезает диалог до history_limit, не разрывая пары assistant(tool_calls) ↔ tool."""
+        """Обрезает диалог до history_limit, гарантируя начало с сообщения 'user'."""
         if len(self.dialog) <= self.history_limit:
-            print("\ntrim: NO\n")
             return
-            
-        # Сдвигаем точку обрезки вправо, пока не окажемся в безопасной позиции
+
+        # Рассчитываем сдвиг
         cut = len(self.dialog) - self.history_limit
+
+        # Ищем ближайший 'user' справа, чтобы не разорвать tool_calls 
+        # и гарантировать правильный порядок сообщений для API
         while cut < len(self.dialog):
-            msg = self.dialog[cut]
-            # Нельзя начинать с tool
-            if msg.get('role') == 'tool':
-                cut += 1
-                continue
-            # Нельзя начинать с assistant, у которого есть tool_calls (если за ним не идут все соответствующие tool)
-            if msg.get('role') == 'assistant' and msg.get('tool_calls'):
-                expected_ids = {tc['id'] for tc in msg['tool_calls']}
-                found_ids = set()
-                for m in self.dialog[cut+1:]:
-                    if m.get('role') == 'tool':
-                        if m.get('tool_call_id') in expected_ids:
-                            found_ids.add(m['tool_call_id'])
-                    else:
-                        break
-                if found_ids != expected_ids:
-                    cut += 1
-                    continue
-            break
-            
-        print("\ntrim: YES\n")
+            if self.dialog[cut].get("role") == "user":
+                break
+            cut += 1
+
+        # Если 'user' не найден (крайний случай), режем по расчёту
+        if cut >= len(self.dialog):
+            cut = len(self.dialog) - self.history_limit
+
+        print(f"\ntrim: YES (removed {cut} messages)\n")
         self.dialog = self.dialog[cut:]
+
+
+    # def _safe_trim(self):
+    #     """Обрезает диалог до history_limit, не разрывая пары assistant(tool_calls) ↔ tool."""
+    #     Рабочий 
+    #     if len(self.dialog) <= self.history_limit:
+    #         print("\ntrim: NO\n")
+    #         return
+            
+    #     # Сдвигаем точку обрезки вправо, пока не окажемся в безопасной позиции
+    #     cut = len(self.dialog) - self.history_limit
+    #     while cut < len(self.dialog):
+    #         msg = self.dialog[cut]
+    #         # Нельзя начинать с tool
+    #         if msg.get('role') == 'tool':
+    #             cut += 1
+    #             continue
+    #         # Нельзя начинать с assistant, у которого есть tool_calls (если за ним не идут все соответствующие tool)
+    #         if msg.get('role') == 'assistant' and msg.get('tool_calls'):
+    #             expected_ids = {tc['id'] for tc in msg['tool_calls']}
+    #             found_ids = set()
+    #             for m in self.dialog[cut+1:]:
+    #                 if m.get('role') == 'tool':
+    #                     if m.get('tool_call_id') in expected_ids:
+    #                         found_ids.add(m['tool_call_id'])
+    #                 else:
+    #                     break
+    #             if found_ids != expected_ids:
+    #                 cut += 1
+    #                 continue
+    #         break
+            
+    #     print("\ntrim: YES\n")
+    #     self.dialog = self.dialog[cut:]
 
 
 

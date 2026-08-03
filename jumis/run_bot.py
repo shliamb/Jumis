@@ -10,6 +10,7 @@ from bot_instance import AioBot
 from python_socks._errors import ProxyError
 from utils.serialize import serialize_for_json
 from llm.llm_router import LLMWorker
+from database.memories import DBMemories
 
 
 import logging
@@ -56,15 +57,42 @@ async def init_router() -> None:
 
 #### Запуск Телеграмм Бота #####
 async def main_bot() -> None:
-    """ Главная функция запуска всего бота """
+    """ Главная функция запуска и инициализации всей системы """
+    print("Запуск системы...")
+
+    # Подключение к базе данных
+    await db.connect()
+    print("Успешное подключение к PostgreSQL.")
+
+    # Инициализация памяти (загружает категории в кэш self)
+    db_memory = DBMemories()
+    try:
+        await db_memory.init()
+        print("Инициализация памяти успешно прошла")
+    except:
+        print("База не инициализирована")
+
+    # Инициализация LLM Воркера и передача в aiogram workflow_data
+    llm = LLMWorker(db_memory=db_memory)
+    dp["llm"] = llm  # Доступен во всех хэндлерах через `dp` или контекст
+
+    # Проверим динамическое получение категорий фактов:
+    test_tools = await llm.get_tools_for_agent(["write_fact"])
+    print("Сгенерированный enum:", test_tools[0]["function"]["parameters"]["properties"]["facts_category"].get("enum"))
+
+    # Создание бота и подключение роутеров
     await bot_instance.create_bot()
     dp.bot = bot_instance.bot
     await init_router()
-    llm = LLMWorker()
-    dp["llm"] = llm  # Теперь aiogram знает про этот объект глобально
-    await db.connect()
-    telethon_task = asyncio.create_task(mytelethon.run())
 
+    if bot_instance.bot is None:
+        print("Не удалось создать экземпляр бота! Завершение работы.")
+        return
+
+    # Запуск фоновых задач (Telethon и др.)
+    telethon_task = asyncio.create_task(mytelethon.run(), name="TelethonTask")
+
+    print("Бот успешно запущен и готов к приему сообщений.")
 
     try:
         while True:
@@ -96,9 +124,28 @@ async def main_bot() -> None:
                 print("📢 Бот получил сигнал остановки")
                 raise
 
+    # finally:
+    #     print("🔒 Закрываем пул БД...")
+    #     await db.close()
     finally:
-        print("🔒 Закрываем пул БД...")
-        await db.close()
+        # Безопасное завершение всех фоновых процессов при остановке (Graceful Shutdown)
+        print("Остановка всех сервисов и завершение работы...")
+
+        # Отменяем таску Telethon
+        if not telethon_task.done():
+            telethon_task.cancel()
+            try:
+                await telethon_task
+            except asyncio.CancelledError:
+                print("Фоновая таска Telethon успешно остановлена.")
+
+        # Закрываем сессию бота
+        if dp.bot:
+            await dp.bot.session.close()
+
+        # Закрываем пул соединений БД
+        await db.disconnect()
+        print("Соединение с БД закрыто. Завершение работы выполнено корректно.")
 
 
 if __name__ == "__main__":
