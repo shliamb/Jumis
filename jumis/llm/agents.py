@@ -56,7 +56,7 @@ AGENTS = {
             "get_date",
 
             # CATEGORIES FACTS
-            "get_categories_facts", # Для теста, ИИ и так знает категории из tools
+            # "get_categories_facts", # Для теста, ИИ и так знает категории из tools
             "add_category_facts",
 
             # FACTS
@@ -68,11 +68,14 @@ AGENTS = {
             # "facts_by_user",
 
             # CATEGORIES USERS
+            "add_category_users",
+            # "get_categories_users",
 
             # USERS
             "get_users",
             "get_user",
-            "update_user"
+            "update_user",
+            "search_users"
         ]
     }
 

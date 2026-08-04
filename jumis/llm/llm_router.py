@@ -86,10 +86,10 @@ class LLMWorker:
         )
 
         # 2. Достаем категории users_categories
-        client_category_names = (
-            [c["name"] for c in self.db_users.client_categories] 
-            if hasattr(self.db_users, 'client_categories') and self.db_users.client_categories 
-            else ["default"]
+        users_category_names = (
+            [c["name"] for c in self.db_users.users_categories] 
+            if hasattr(self.db_users, 'users_categories') and self.db_users.users_categories 
+            else ["not_defined"]
         )
 
         for func_name in function_names:
@@ -111,8 +111,8 @@ class LLMWorker:
                     properties["facts_category"]["enum"] = fact_category_names
 
                 # --- Подстановка категорий ПОЛЬЗОВАТЕЛЕЙ ---
-                if "client_category" in properties:
-                    properties["client_category"]["enum"] = client_category_names
+                if "user_category" in properties:
+                    properties["user_category"]["enum"] = users_category_names
 
                 tools.append({
                     "type": "function",
@@ -172,6 +172,10 @@ class LLMWorker:
                 # Автоматически подставляем db_memory, если функция ждёт напрямую память
                 if 'db_memory' in sig.parameters:
                     call_kwargs['db_memory'] = self.db_memory
+
+                # Автоматически подставляем db_users, если функция ждёт напрямую память
+                if 'db_users' in sig.parameters:
+                    call_kwargs['db_users'] = self.db_users
 
                 # Вызов в зависимости от типа функции (async/sync)
                 if inspect.iscoroutinefunction(func):

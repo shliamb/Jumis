@@ -54,7 +54,8 @@ def create_tables_in_db():
             full_name VARCHAR(250),                        -- Имя + Фамилия из профиля Telegram
             phone VARCHAR(50),                             -- Телефон (если поделится контактом)
             
-            category VARCHAR(50) DEFAULT 'not_defined' REFERENCES users_categories(name) ON UPDATE CASCADE ON DELETE SET DEFAULT,
+            category VARCHAR(50) DEFAULT 'not_defined'
+              REFERENCES users_categories(name) ON UPDATE CASCADE ON DELETE SET DEFAULT,
             
             comment TEXT,                                  -- Твоя личная ручная заметка о человеке
             summary TEXT,                                  -- Краткая выжимка диалога от ИИ для быстрого контекста
@@ -74,9 +75,7 @@ def create_tables_in_db():
             updated_at TIMESTAMP DEFAULT NOW()             -- Дата любого изменения профиля
         );
 
-        -- Индексы для моментального поиска по tg_id и категориям
-        CREATE INDEX IF NOT EXISTS idx_users_tg_id ON users(tg_id);
-        CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
+        -- Индексы
         CREATE INDEX IF NOT EXISTS idx_users_category ON users(category);
         '''
         cursor.execute(create_table_users)

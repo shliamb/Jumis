@@ -1,5 +1,5 @@
 # jumis/llm/functions.py
-from database.users import get_all_users, db_get_user, db_update_user
+#from database.users import get_all_users, db_get_user, db_update_user
 from vector import embedder
 from datetime import datetime
 from logs.set_logger import set_logger
@@ -37,6 +37,8 @@ async def add_category_facts(name: str, description: str = "", db_memory=None) -
     success = await db_memory.add_category(category_data)
 
     if success:
+        # Обновляем кэш в db_memory
+        await db_memory._refresh_categories()
         return f"Category '{name}' successfully created and available for storing facts."
     else:
         return f"Failed to create category '{name}'."
@@ -532,10 +534,75 @@ async def update_fact(
 ####### USERS ###########
 
 
+async def add_category_users(name: str, description: str = "", db_users=None) -> str:
+    """Creates a new users category in the database."""
+    if not db_users:
+        return "Error: Users service is unavailable."
 
-async def get_users() -> str:
+    # Минимальная валидация имени
+    clean_name = name.strip()
+    if not clean_name:
+        return "Error: Category name cannot be empty."
+
+    category_data = {
+        "name": clean_name,
+        "description": description.strip()
+    }
+
+    success = await db_users.add_category(category_data)
+
+    if success:
+        # Обновляем кэш в db_users
+        await db_users._refresh_categories()
+        return f"Category '{clean_name}' successfully created and available for storing users."
+    else:
+        return f"Failed to create category '{clean_name}'."
+
+
+
+async def get_categories_users(db_users=None) -> str:
+    """Форматирует список категорий пользователей в удобный для LLM текст"""
+    if not db_users:
+        return "Error: Users service is unavailable."
+
+    # Обновляем кэш в db_users
+    await db_users._refresh_categories()
+
+    # Забираем список из self.users_categories (если там None, подставится пустой список)
+    categories = db_users.users_categories or []
+
+    if not categories:
+        return "No user categories available in the database."
+
+    formatted_lines = []
+
+    for item in categories:
+        cat_id = item.get("id", "N/A")
+        name = item.get("name", "unnamed")
+        description = item.get("description") or "No description provided."
+
+        # Форматирование даты (created_at или updated_at)
+        created_at = item.get("created_at") or item.get("updated_at")
+        if isinstance(created_at, datetime):
+            date_str = created_at.strftime("%Y-%m-%d %H:%M")
+        elif created_at:
+            date_str = str(created_at)[:16]
+        else:
+            date_str = "no-date"
+
+        # Собираем строчку
+        formatted_lines.append(
+            f"• Category '{name}' (ID: {cat_id}) ({date_str}): {description}"
+        )
+
+    header = f"=== Available Users Categories ({len(formatted_lines)}) ==="
+    return f"{header}\n" + "\n".join(formatted_lines)
+
+
+
+async def get_users(db_users=None) -> str:
     """Возвращает отформатированный список всех пользователей со всеми полями из БД для LLM."""
-    users: list[dict] = await get_all_users()
+    users: list[dict] = await db_users.get_all_users()
 
     if not users:
         logger.info("No users found in database.")
@@ -616,7 +683,8 @@ async def get_users() -> str:
 async def get_user(
     user_id: int | None = None,
     tg_id: int | None = None,
-    username: str | None = None
+    username: str | None = None,
+    db_users=None
 ) -> str:
     """Поиск профиля пользователя по user_id (БД), tg_id или username."""
     if not user_id and not tg_id and not username:
@@ -624,7 +692,7 @@ async def get_user(
         return "Error: Provide at least one identifier (user_id, tg_id, or username)."
 
     # Запрашиваем пользователя через единую функцию БД
-    data_user = await db_get_user(user_id=user_id, tg_id=tg_id, username=username)
+    data_user = await db_users.db_get_user(user_id=user_id, tg_id=tg_id, username=username)
 
     if not data_user:
         target = f"id={user_id}" if user_id else (f"tg_id={tg_id}" if tg_id else f"username='{username}'")
@@ -690,6 +758,7 @@ async def update_user(
     user_id: int | None = None,
     tg_id: int | None = None,
     target_username: str | None = None,
+    db_users=None,
     **kwargs
 ) -> str:
     """Обновление профиля пользователя по одному из идентификаторов."""
@@ -724,6 +793,10 @@ async def update_user(
         # Если меняется логин пользователя (колонка username) — зачищаем @
         if key == "username" and isinstance(val, str):
             val = val.strip().lstrip("@")
+
+        # В схеме разделяем - user_category, в базе category
+        if key == "user_category":
+            key = "category"
             
         update_fields[key] = val
 
@@ -735,7 +808,7 @@ async def update_user(
     user_data.update(update_fields)
 
     # 4. Вызываем функцию БД (db_update_user возвращает True / False)
-    success = await db_update_user(user_data)
+    success = await db_users.db_update_user(user_data)
 
     if not success:
         logger.error("Failed to update user %s", target_label)
@@ -747,6 +820,55 @@ async def update_user(
     return f"Success: User ({target_label}) updated. Fields changed: [{changed_keys}]."
 
 
+
+async def search_users(
+    query: str = None,
+    user_id: int = None,
+    tg_id: int = None,
+    category: str = None,
+    limit: int = 10,
+    db_users=None,
+    **kwargs  # Защита от лишних аргументов LLM
+) -> str:
+    """Инструмент поиска пользователей"""
+    if not db_users:
+        return "Error: Users service is unavailable."
+
+    search_data = {
+        "query": query,
+        "user_id": user_id,
+        "tg_id": tg_id,
+        "category": category,
+        "limit": limit or 10
+    }
+
+    users = await db_users.search_users(search_data)
+
+    if not users:
+        return "No users found matching the specified search criteria."
+
+    formatted_lines = []
+    for u in users:
+        uid = u.get("id", "N/A")
+        utg = u.get("tg_id") or "N/A"
+        username = f"@{u['username']}" if u.get("username") else "no-username"
+        name = u.get("full_name") or "Unnamed"
+        cat = u.get("category", "not_defined")
+        
+        flags = []
+        if u.get("is_admin"): flags.append("ADMIN")
+        if u.get("is_blocked"): flags.append("BLOCKED")
+        if u.get("is_whitelisted"): flags.append("WHITE-LIST")
+        flags_str = f" [{', '.join(flags)}]" if flags else ""
+
+        comment_str = f" | Note: {u['comment']}" if u.get("comment") else ""
+
+        formatted_lines.append(
+            f"• [ID: {uid} | TG: {utg}] {name} ({username}){flags_str} | Category: '{cat}'{comment_str}"
+        )
+
+    header = f"=== Found Users ({len(formatted_lines)}) ==="
+    return f"{header}\n" + "\n".join(formatted_lines)
 
 
 
@@ -944,7 +1066,7 @@ FUNCTIONS = {
                 # --- Редактируемые поля ---
                 "full_name": {"type": "string", "description": "Full name of the user."},
                 "phone": {"type": "string", "description": "Phone number."},
-                "category": {"type": "string", "description": "Category (e.g., 'client', 'friend', 'spam', 'hardware')."},
+                "user_category": {"type": "string", "description": "Optional category name to filter search results."}, # Динамический enum подставится автоматически через get_tools_for_agent
                 "comment": {"type": "string", "description": "Personal manual note about the user."},
                 "summary": {"type": "string", "description": "AI-generated summary of past dialogue context."},
                 
@@ -959,7 +1081,68 @@ FUNCTIONS = {
             },
             "required": []
         }
-    }
+    },
+
+
+    "get_categories_users": {
+        "description": "Retrieve a list of all available user (client) categories and their descriptions.",
+        "function": get_categories_users,
+        "schema": {
+            "type": "object",
+            "properties": {},
+            "required": []
+        }
+    },
+
+    "add_category_users": {
+        "description": "Create a new category for classifying or segmenting users (clients).",
+        "function": add_category_users,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "Short name of the user category (e.g., 'vip', 'service', 'wholesale')."
+                },
+                "description": {
+                    "type": "string",
+                    "description": "Detailed description of the category's purpose and assignment rules."
+                }
+            },
+            "required": ["name"]
+        }
+    },
+
+    "search_users": {
+        "description": "Search for users/clients in the database by ID, Telegram ID, name/username search query, or category.",
+        "function": search_users,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Search query to match against username, first name, last name, or notes."
+                },
+                "user_id": {
+                    "type": "integer",
+                    "description": "Exact internal database user ID."
+                },
+                "tg_id": {
+                    "type": "integer",
+                    "description": "Exact Telegram user ID (tg_id)."
+                },
+                "category": {
+                    "type": "string",
+                    "description": "Filter users by specific user category."
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum number of results to return (default is 10)."
+                }
+            },
+            "required": []
+        }
+    },
 
 }
 

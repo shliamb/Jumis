@@ -81,7 +81,7 @@ async def main_bot() -> None:
     except:
         print("База пользователей не инициализирована")
 
-    dp["db_users"] = db_users 
+    dp["db_users"] = db_users # для хендлера start ..
 
 
     # Инициализация LLM Воркера и передача в aiogram workflow_data
@@ -89,9 +89,13 @@ async def main_bot() -> None:
     dp["llm"] = llm  # Доступен во всех хэндлерах через `dp` или контекст
 
 
-    # # Проверим динамическое получение категорий фактов:
-    # test_tools = await llm.get_tools_for_agent(["write_fact"])
-    # print("Сгенерированный enum:", test_tools[0]["function"]["parameters"]["properties"]["facts_category"].get("enum"))
+    # Проверим динамическое получение категорий фактов:
+    facts_category = await llm.get_tools_for_agent(["write_fact"])
+    print("Сгенерированный enum фактов:", facts_category[0]["function"]["parameters"]["properties"]["facts_category"].get("enum"))
+
+    # Проверим динамическое получение категорий пользователей:
+    user_category = await llm.get_tools_for_agent(["update_user"])
+    print("Сгенерированный enum: пользователей", user_category[0]["function"]["parameters"]["properties"]["user_category"].get("enum"))
 
     # Создание бота и подключение роутеров
     await bot_instance.create_bot()

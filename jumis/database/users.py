@@ -314,3 +314,42 @@ class DBUsers():
             return dict(record)
         return {}
 
+
+    async def search_users(self, search_data: dict) -> list[dict]:
+        """Поиск пользователей по различным фильтрам и поисковой строке."""
+        sql = "SELECT * FROM users WHERE 1=1"
+        params = []
+        param_idx = 1
+
+        query = search_data.get("query")
+        user_id = search_data.get("user_id")
+        tg_id = search_data.get("tg_id")
+        category = search_data.get("category")
+        limit = search_data.get("limit") or 10
+
+        if user_id is not None:
+            sql += f" AND id = ${param_idx}"
+            params.append(user_id)
+            param_idx += 1
+
+        if tg_id is not None:
+            sql += f" AND tg_id = ${param_idx}"
+            params.append(tg_id)
+            param_idx += 1
+
+        if category and category != "not_defined":
+            sql += f" AND category = ${param_idx}"
+            params.append(category)
+            param_idx += 1
+
+        if query:
+            # Поиск без учета регистра по имени, юзернейму, заметке и телефону
+            sql += f" AND (username ILIKE ${param_idx} OR full_name ILIKE ${param_idx} OR comment ILIKE ${param_idx} OR phone ILIKE ${param_idx})"
+            params.append(f"%{query.strip()}%")
+            param_idx += 1
+
+        sql += f" ORDER BY id DESC LIMIT ${param_idx}"
+        params.append(limit)
+
+        records = await self.db.fetch(sql, *params)
+        return [dict(rec) for rec in records]

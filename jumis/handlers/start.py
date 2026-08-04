@@ -7,7 +7,6 @@ from aiogram.filters import CommandStart
 from aiogram import Router, types, F
 from datetime import datetime
 from handlers.common import rights_verification
-from database.users import add_user, db_get_user
 
 # from aiogram.types import Message
 # from aiogram.fsm.context import FSMContext
@@ -41,7 +40,7 @@ def get_msg(key: str, lang_code: str | None) -> str:
 
 
 @router.message(CommandStart())
-async def start_router(message: types.Message):
+async def start_router(message: types.Message, db_users):
     """
     Обработчик команды /start.
     Проверяет права, защищает от ботов и регистрирует нового пользователя, 
@@ -67,7 +66,7 @@ async def start_router(message: types.Message):
         return
 
     # 3. Проверка наличия пользователя в базе
-    if await db_get_user(tg_id=user_id):
+    if await db_users.db_get_user(tg_id=user_id):
         await message.answer(get_msg("already_registered", lang))
         return
 
@@ -80,7 +79,7 @@ async def start_router(message: types.Message):
         "created_at": datetime.now(),
     }
 
-    if await add_user(new_user_data):
+    if await db_users.add_user(new_user_data):
         await message.answer(get_msg("success", lang))
     else:
         await message.answer(get_msg("error", lang))
