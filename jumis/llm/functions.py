@@ -1,5 +1,6 @@
 # jumis/llm/functions.py
 #from database.users import get_all_users, db_get_user, db_update_user
+import asyncio
 from vector import embedder
 from datetime import datetime
 from logs.set_logger import set_logger
@@ -8,7 +9,8 @@ import json
 
 
 
-
+# Множество для хранения ссылок на активные фоновые задачи (защита от GC в Python 3.11+)
+background_tasks = set()
 
 
 ########## DATE ###############
@@ -89,39 +91,66 @@ async def get_categories_facts(db_memory=None) -> str:
 
 
 
+async def background_vectorize_fact(fact_id: int, content: str, db_memory):
+    """Фоновая векторизация факта и обновление его записи в БД."""
+    try:
+        # 1. Получаем вектор
+        embedding = await embedder.get_embedding(content)
+        if not embedding:
+            logger.error(f"[BG Embedding] Failed to generate embedding for fact_id={fact_id}")
+            return
+
+        fact_data = {
+            "id": fact_id,
+            "embedding": embedding
+        }
+
+        # 2. Обновляем факт в базе
+        success = await db_memory.edit_fact(fact_data)
+        if success:
+            logger.info(f"[BG Embedding] Fact ID {fact_id} successfully vectorized and updated.")
+        else:
+            logger.error(f"[BG Embedding] Failed to update embedding in DB for fact_id={fact_id}")
+
+    except Exception as e:
+        logger.error(f"[BG Embedding] Critical error vectorizing fact_id={fact_id}: {e}", exc_info=True)
+
+
+    
 async def write_fact(content: str, facts_category: str, user_id: int = None, db_memory = None) -> str:
-    """ Сохранить важную информацию/факт в долговременную память."""
+    """Сохраняет факт в БД и фоново запускает векторизацию."""
     if not db_memory:
         return "Error: Memory service is not available."
+
     try:
-        # 1. Собираем словарь данных
+        clean_content = content.strip()
+        if not clean_content:
+            return "Error: Fact content cannot be empty."
+
         fact_data = {
-            "content": content,
+            "content": clean_content,
             "category": facts_category,
         }
-        
-        # user_id добавляем только если он передан (чтобы не перебивать NULL)
+
+        # user_id добавляем только если он валиден
         if user_id is not None and user_id != 0:
             fact_data["user_id"] = user_id
 
-        # 2. Генерируем вектор (если используешь векторизацию)
-        embedding = await embedder.get_embedding(content)
-        # asyncio.create_task(background_vectorize_fact(fact_id, content))
-        if embedding:
-            fact_data["embedding"] = embedding
-        else:
-            print("Error embedding")
+        # 1. Быстро сохраняем факт в БД без вектора
+        fact_id = await db_memory.add_fact(fact_data)
 
-        # 3. Сохраняем
-        success = await db_memory.add_fact(fact_data)
+        if fact_id:
+            # 2. Регистрируем фоновую задачу в множестве, чтобы GC её не уничтожил
+            task = asyncio.create_task(background_vectorize_fact(fact_id, clean_content, db_memory))
+            background_tasks.add(task)
+            task.add_done_callback(background_tasks.discard)
 
-        if success:
-            return "Fact successfully written to memory."
+            return f"Fact successfully written to memory (ID: {fact_id})."
         else:
             return "Error: Could not save fact to database."
 
     except Exception as e:
-        #logger.error(f"Error in write_fact handler: {e}")
+        logger.error(f"Error in write_fact handler: {e}", exc_info=True)
         return f"Error executing write_fact: {str(e)}"
 
 

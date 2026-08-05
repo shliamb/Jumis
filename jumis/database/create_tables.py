@@ -29,7 +29,7 @@ def create_tables_in_db():
             id SERIAL PRIMARY KEY,
             name VARCHAR(50) UNIQUE NOT NULL,    -- not_defined, client, friend, spam, family, lead, partner
             description TEXT,                    -- описание для понимания LLM
-            created_at TIMESTAMP DEFAULT NOW()
+            created_at TIMESTAMPTZ DEFAULT NOW()
         );
 
         -- Базовый набор категорий пользователей с понятным описанием для LLM
@@ -71,8 +71,8 @@ def create_tables_in_db():
             model_smart VARCHAR(100),
 
             
-            created_at TIMESTAMP DEFAULT NOW(),            -- Дата первого контакта
-            updated_at TIMESTAMP DEFAULT NOW()             -- Дата любого изменения профиля
+            created_at TIMESTAMPTZ DEFAULT NOW(),            -- Дата первого контакта
+            updated_at TIMESTAMPTZ DEFAULT NOW()             -- Дата любого изменения профиля
         );
 
         -- Индексы
@@ -98,7 +98,7 @@ def create_tables_in_db():
             embedding VECTOR(768),                         -- Исправлено на 768 под нашу модель!
             is_embedded BOOLEAN DEFAULT FALSE,
             
-            created_at TIMESTAMP DEFAULT NOW()
+            created_at TIMESTAMPTZ DEFAULT NOW()
         );
 
         -- Быстрые индексы для messages
@@ -114,7 +114,7 @@ def create_tables_in_db():
             id SERIAL PRIMARY KEY,
             name VARCHAR(50) UNIQUE NOT NULL,    -- fact, preference, hardware, agreement
             description TEXT,                    -- описание для понимания LLM
-            created_at TIMESTAMP DEFAULT NOW()
+            created_at TIMESTAMPTZ DEFAULT NOW()
         );
 
         -- Наполняем дефолтными категориями, если их еще нет (ON CONFLICT DO NOTHING)
@@ -139,8 +139,8 @@ def create_tables_in_db():
             content TEXT NOT NULL,
             embedding VECTOR(768),
             
-            created_at TIMESTAMP DEFAULT NOW(),
-            updated_at TIMESTAMP DEFAULT NOW()
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            updated_at TIMESTAMPTZ DEFAULT NOW()
         );
 
         -- Индексы
@@ -175,7 +175,7 @@ def create_tables_in_db():
             -- Категория (chat, summary, tool_call, embedding)
             call_type VARCHAR(50) DEFAULT 'chat',                
             
-            created_at TIMESTAMP DEFAULT NOW()
+            created_at TIMESTAMPTZ DEFAULT NOW()
         );
 
         -- Индексы для быстрой аналитики и построения отчетов
@@ -224,8 +224,8 @@ def create_tables_in_db():
             -- Статус задачи: 'pending' (ждет времени), 'running' (в процессе), 'completed' (завершена), 'cancelled' (отменена)
             status VARCHAR(50) DEFAULT 'pending',
             
-            created_at TIMESTAMP DEFAULT NOW(),
-            updated_at TIMESTAMP DEFAULT NOW()
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            updated_at TIMESTAMPTZ DEFAULT NOW()
         );
 
         -- Индекс для фонового демона: ищет только задачи, время которых наступило!

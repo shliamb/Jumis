@@ -86,7 +86,7 @@ async def main_bot() -> None:
 
     # Инициализация LLM Воркера и передача в aiogram workflow_data
     llm = LLMWorker(db_memory=db_memory, db_users=db_users)
-    dp["llm"] = llm  # Доступен во всех хэндлерах через `dp` или контекст
+    dp["llm"] = llm  # Доступен во всех хэндлерах через `llm` или контекст
 
 
     # Проверим динамическое получение категорий фактов:

@@ -1,4 +1,5 @@
 # database/memories.py
+from typing import Optional
 from logs.set_logger import set_logger
 logger = set_logger(name="db")
 from database import db
@@ -81,28 +82,29 @@ class DBMemories():
 
     ######## FACTS ##########
 
-    async def add_fact(self, fact_data: dict) -> bool:
-        """Добавить факт"""
+
+    async def add_fact(self, fact_data: dict) -> Optional[int]:
+        """Добавить факт и вернуть его id (или None в случае ошибки)."""
         fact_dict = fact_data.copy()
-        
+
         # Если передали список чисел в embedding, переводим в формат строки pgvector
         if 'embedding' in fact_dict and isinstance(fact_dict['embedding'], list):
             fact_dict['embedding'] = str(fact_dict['embedding'])
-            
+
         keys = list(fact_dict.keys())
         values = list(fact_dict.values())
-        
+
         columns = ", ".join(keys)
         placeholders = ", ".join([f"${i+1}" for i in range(len(values))])
-        
-        query = f"INSERT INTO memories ({columns}) VALUES ({placeholders})"
-        
+
+        query = f"INSERT INTO memories ({columns}) VALUES ({placeholders}) RETURNING id"
+
         try:
-            await self.db.execute(query, *values)
-            return True
+            fact_id = await self.db.fetchval(query, *values)
+            return fact_id
         except Exception as e:
             logger.error(f"Error adding memories: {e}")
-            return False
+            return None
 
 
     async def get_facts_by_category(self, category: str) -> list:
@@ -163,95 +165,6 @@ class DBMemories():
             records = await self.db.fetch(query, *params)
             return [dict(rec) for rec in records] if records else []
 
-
-
-    # async def search_vectors(
-    #         self, 
-    #         embedding: list, 
-    #         user_id: int = None, 
-    #         category: str = None, 
-    #         limit: int = 10
-    #     ) -> list[dict]:
-    #         """Универсальный векторный поиск с опциональной фильтрацией по user_id и/или category"""
-    #         emb_str = str(embedding)
-    #         conditions = []
-    #         params = [emb_str]  # $1 — это всегда вектор
-            
-    #         param_idx = 2
-            
-    #         if user_id is not None:
-    #             conditions.append(f"user_id = ${param_idx}")
-    #             params.append(user_id)
-    #             param_idx += 1
-                
-    #         if category and category.strip():
-    #             conditions.append(f"category = ${param_idx}")
-    #             params.append(category.strip())
-    #             param_idx += 1
-                
-    #         params.append(limit)
-    #         limit_param_idx = param_idx
-
-    #         # Собираем WHERE только если есть фильтры. Если их нет — ищет ВООБЩЕ ПО ВСЕЙ БАЗЕ
-    #         where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
-
-    #         query = f"""
-    #             SELECT *, (1 - (embedding <=> $1::vector)) AS similarity
-    #             FROM memories 
-    #             {where_clause}
-    #             ORDER BY embedding <=> $1::vector 
-    #             LIMIT ${limit_param_idx}
-    #         """
-            
-    #         records = await self.db.fetch(query, *params)
-    #         return [dict(rec) for rec in records] if records else []
-
-
-
-    # async def get_vector_by_user_id(self, user_id: int, embedding: list, n: int = 5) -> list:
-    #     """Забрать факты пользователя, близкие по вектору (первые n штук)"""
-    #     emb_str = str(embedding)
-        
-    #     # 1 - (embedding <=> $2::vector) дает значение сходства (Similarity) от 0 до 1
-    #     query = """
-    #         SELECT *, (1 - (embedding <=> $2::vector)) AS similarity
-    #         FROM memories 
-    #         WHERE user_id = $1 
-    #         ORDER BY embedding <=> $2::vector 
-    #         LIMIT $3
-    #     """
-    #     records = await self.db.fetch(query, user_id, emb_str, n)
-    #     return [dict(rec) for rec in records] if records else []
-
-
-    # async def get_vector_by_category(self, category: str, embedding: list, n: int = 10) -> list:
-    #     """Забрать факты категории, близкие по вектору (первые n штук)"""
-    #     emb_str = str(embedding)
-        
-    #     query = """
-    #         SELECT *, (1 - (embedding <=> $2::vector)) AS similarity
-    #         FROM memories 
-    #         WHERE category = $1 
-    #         ORDER BY embedding <=> $2::vector 
-    #         LIMIT $3
-    #     """
-    #     records = await self.db.fetch(query, category, emb_str, n)
-    #     return [dict(rec) for rec in records] if records else []
-
-
-    # async def get_vector_by_jumis(self, embedding: list, n: int = 10) -> list:
-    #     """Забрать глобальные факты Jumis (user_id IS NULL), близкие по вектору"""
-    #     emb_str = str(embedding)
-        
-    #     query = """
-    #         SELECT *, (1 - (embedding <=> $1::vector)) AS similarity
-    #         FROM memories 
-    #         WHERE user_id IS NULL 
-    #         ORDER BY embedding <=> $1::vector 
-    #         LIMIT $2
-    #     """
-    #     records = await self.db.fetch(query, emb_str, n)
-    #     return [dict(rec) for rec in records] if records else []
 
 
     async def edit_fact(self, fact_data: dict) -> bool:
