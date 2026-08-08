@@ -82,7 +82,7 @@ def create_tables_in_db():
 
 
         create_table_messages = '''
-        -- 3. Таблица сырых сообщений (История диалогов)
+        -- Таблица сырых сообщений (История диалогов)
         CREATE TABLE IF NOT EXISTS messages (
             id SERIAL PRIMARY KEY,
             user_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
