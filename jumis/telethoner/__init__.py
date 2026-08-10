@@ -1,6 +1,6 @@
-#! telethoner/__init__.py
-from telethoner.worker_telethon import myTelethon
+# #! telethoner/__init__.py
+# from telethoner.worker_telethon import myTelethon
 
 
-mytelethon = myTelethon()
-__all__ = ['mytelethon']
+# mytelethon = myTelethon()
+# __all__ = ['mytelethon']

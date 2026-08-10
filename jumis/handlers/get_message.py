@@ -58,14 +58,14 @@ def markdown_to_rich_html(text: str) -> str:
     # =========================================================================
     # ГЛАВНЫЙ ФИКС: Вычищаем вражеские теги <p> и </p>, которые ломают Telegram
     # =========================================================================
-    rich_html = re.sub(r'</p>\s*<p>', '\n\n', rich_html)  # Заменяем стыки абзацев на двойной перенос
-    rich_html = re.sub(r'</?p>', '', rich_html)            # Удаляем оставшиеся <p> и </p>
+    rich_html = re.sub(r'</p>\s*<p>', '<br/>', rich_html)  # Заменяем стыки абзацев на двойной перенос
+    rich_html = re.sub(r'</?p>', '<br/>', rich_html)            # Удаляем оставшиеся <p> и </p>
 
     # 4. Делаем ВСЕ цитаты раскрывающимися
     rich_html = rich_html.replace('<blockquote>', '<blockquote expandable>')
 
     # Очищаем лишние переносы
-    rich_html = re.sub(r'\n{3,}', '\n\n', rich_html).strip()
+    #rich_html = re.sub(r'\n{3,}', '\n\n', rich_html).strip()
 
     # print("\n=== ИТОГОВЫЙ RICH HTML ДЛЯ ТЕЛЕГРАМ ===\n", rich_html, "\n=======================================\n")
 

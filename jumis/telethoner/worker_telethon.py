@@ -13,12 +13,13 @@ logger = set_logger(name="telethon")
 
 
 class myTelethon:
-    def __init__(self):
+    def __init__(self, queue_messages):
         self.use_proxy = USE_MTPROTO
         self.proxy_strings = MTPROXY_STRINGS if self.use_proxy else []
         self.client = None
         self.current_proxy_index = -1   # индекс последнего успешного прокси
         self.error_limit = ERR_PROXY_LIMIT
+        self.queue_messages = queue_messages
 
 
     def _parse_proxy_str(self, proxy_str: str):
@@ -182,10 +183,6 @@ class myTelethon:
                 **media_info,  # Подмешивает msg_type, media_file_id, media_name
             }
 
-            # 9. Собираем итоговую задачу в очередь workers_mess_queues
-            task_payload = {"user": user_payload, "message": message_payload}
-            # await workers_mess_queues.put(task_payload)
-
             # Лог для отладки направления
             # direction_icon = "📤 [ВЫ ОТВЕТИЛИ]" if event.out else "📥 [ВХОДЯЩЕЕ]"
             # print(
@@ -193,12 +190,15 @@ class myTelethon:
             #     f"  Тип: {message_payload['msg_type']} | Роль: {role} | Текст: {message_payload['content'][:50]}"
             # )
 
-            msg_type = media_info.get("msg_type")
+            # msg_type = media_info.get("msg_type")
 
-            out_message = f"Сообщение: {event.raw_text[:40]}" if msg_type == "text" else f"Сообщение: {msg_type}"
+            # out_message = f"Сообщение: {event.raw_text[:40]}" if msg_type == "text" else f"Сообщение: {msg_type}"
 
-            print(f"💬 Чат {chat.id} | Роль: {role} ({author_type}) | user_id: {sender.id} | {out_message}")
+            # print(f"💬 Чат {chat.id} | Роль: {role} ({author_type}) | user_id: {sender.id} | {out_message}")
 
+            # 9. Собираем итоговую задачу в очередь self.queue_messages
+            task_payload = {"user": user_payload, "message": message_payload}
+            await self.queue_messages.put(task_payload)
 
 
 

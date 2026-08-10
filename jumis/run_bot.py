@@ -25,12 +25,14 @@ from handlers import ALL_ROUTERS
 from database import db
 from handlers.dispatcher import dp
 
-from telethoner import mytelethon
+from telethoner.worker_telethon import myTelethon
+from ingest.worker import IngestionWorker
 
 
 # В AioBot производится ротирование прокси
 # При обрыве, прокси должен сам переподключиться к лушему по ping
 bot_instance = AioBot(USE_PROXY, SOCKS5PROXY_STRINGS, TELEGRAM_BOT_TOKEN)
+
 
 
 
@@ -95,7 +97,7 @@ async def main_bot() -> None:
 
     # Проверим динамическое получение категорий пользователей:
     user_category = await llm.get_tools_for_agent(["update_user"])
-    print("Сгенерированный enum: пользователей", user_category[0]["function"]["parameters"]["properties"]["user_category"].get("enum"))
+    print("Сгенерированный enum пользователей:", user_category[0]["function"]["parameters"]["properties"]["user_category"].get("enum"))
 
     # Создание бота и подключение роутеров
     await bot_instance.create_bot()
@@ -106,8 +108,16 @@ async def main_bot() -> None:
         print("Не удалось создать экземпляр бота! Завершение работы.")
         return
 
-    # Запуск фоновых задач (Telethon и др.)
+    # Инициализация очереди
+    queue_messages = asyncio.Queue()
+
+    # Инициализация сервисов
+    mytelethon = myTelethon(queue_messages)
+    ingestion_worker = IngestionWorker(db=db, queue=queue_messages)
+
+    # Запуск фоновых задач в событийнном цикле (Event Loop)
     telethon_task = asyncio.create_task(mytelethon.run(), name="TelethonTask")
+    worker_task = asyncio.create_task(ingestion_worker.run(), name="IngestionWorkerTask")
 
     print("Бот успешно запущен и готов к приему сообщений.")
 
