@@ -85,24 +85,23 @@ def create_tables_in_db():
         -- Таблица сырых сообщений (История диалогов)
         CREATE TABLE IF NOT EXISTS messages (
             id SERIAL PRIMARY KEY,
-            user_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-            tg_msg_id BIGINT,
+            tg_id BIGINT NOT NULL,                         -- Telegram ID собеседника (ID чата) chat_id = user_id для личных сообщений
+            tg_msg_id BIGINT,                              -- ID сообщения внутри Telegram
             
-            role VARCHAR(50) NOT NULL,                     -- user, assistant, system
-            content TEXT,                                  -- Текст сообщения или расшифровка
+            role VARCHAR(50) NOT NULL,                     -- user (собеседник), assistant (ты/ИИ)
+            content TEXT,                                  -- Текст сообщения или транскрибация
             
-            msg_type VARCHAR(50) DEFAULT 'text',           -- text, voice, photo, document
+            msg_type VARCHAR(50) DEFAULT 'text',           -- text, voice, photo, video и т.д.
             media_file_id VARCHAR(500),
             media_local_path VARCHAR(1000),
             
-            embedding VECTOR(768),                         -- Исправлено на 768 под нашу модель!
+            embedding VECTOR(768),                         -- Вектор текста
             is_embedded BOOLEAN DEFAULT FALSE,
             
             created_at TIMESTAMPTZ DEFAULT NOW()
         );
 
-        -- Быстрые индексы для messages
-        CREATE INDEX IF NOT EXISTS idx_messages_user_id_created ON messages(user_id, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_messages_tg_id_created ON messages(tg_id, created_at DESC);
         CREATE INDEX IF NOT EXISTS idx_messages_embedding ON messages USING hnsw (embedding vector_cosine_ops);
 
         '''

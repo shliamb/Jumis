@@ -12,6 +12,7 @@ from utils.serialize import serialize_for_json
 from llm.llm_router import LLMWorker
 from database.memories import DBMemories
 from database.users import DBUsers
+from database.messages import DBMessages
 
 
 import logging
@@ -112,8 +113,12 @@ async def main_bot() -> None:
     queue_messages = asyncio.Queue()
 
     # Инициализация сервисов
+    dbmessages = DBMessages()
     mytelethon = myTelethon(queue_messages)
-    ingestion_worker = IngestionWorker(db=db, queue=queue_messages)
+    ingestion_worker = IngestionWorker(
+        dbmessages=dbmessages,
+        queue=queue_messages
+    )
 
     # Запуск фоновых задач в событийнном цикле (Event Loop)
     telethon_task = asyncio.create_task(mytelethon.run(), name="TelethonTask")
