@@ -78,8 +78,8 @@ async def get_categories_facts(db_memory=None) -> str:
             date_str = "no-date"
 
         # 2. Метка владельца
-        user_id = item.get("user_id")
-        owner_tag = f"[User #{user_id}]" if user_id else "[Global]"
+        tg_id = item.get("tg_id")
+        owner_tag = f"[User #{tg_id}]" if tg_id else "[Global]"
 
         # 3. Собираем строчку
         formatted_lines.append(
@@ -117,7 +117,7 @@ async def background_vectorize_fact(fact_id: int, content: str, db_memory):
 
 
     
-async def write_fact(content: str, facts_category: str, user_id: int = None, db_memory = None) -> str:
+async def write_fact(content: str, facts_category: str, tg_id: int = None, db_memory = None) -> str:
     """Сохраняет факт в БД и фоново запускает векторизацию."""
     if not db_memory:
         return "Error: Memory service is not available."
@@ -132,9 +132,9 @@ async def write_fact(content: str, facts_category: str, user_id: int = None, db_
             "category": facts_category,
         }
 
-        # user_id добавляем только если он валиден
-        if user_id is not None and user_id != 0:
-            fact_data["user_id"] = user_id
+        # tg_id добавляем только если он валиден
+        if tg_id is not None and tg_id != 0:
+            fact_data["tg_id"] = tg_id
 
         # 1. Быстро сохраняем факт в БД без вектора
         fact_id = await db_memory.add_fact(fact_data)
@@ -158,7 +158,7 @@ async def write_fact(content: str, facts_category: str, user_id: int = None, db_
 async def search_facts(
     query: str, 
     facts_category: str = None, 
-    user_id: int = None, 
+    tg_id: int = None, 
     limit: int = 10, 
     db_memory = None
 ) -> str:
@@ -174,15 +174,15 @@ async def search_facts(
     # Универсальный вызов: отработает и глобально, и по фильтрам (любым комбинациям)
     facts: list[dict] = await db_memory.search_vectors(
         embedding=embedding_query,
-        user_id=user_id,
+        tg_id=tg_id,
         category=facts_category,
         limit=limit
     )
 
     # Красивое описание области поиска для логов/ответа
     scope_parts = []
-    if user_id:
-        scope_parts.append(f"user #{user_id}")
+    if tg_id:
+        scope_parts.append(f"user #{tg_id}")
     if facts_category and facts_category.strip():
         scope_parts.append(f"category '{facts_category.strip()}'")
     search_scope = ", ".join(scope_parts) if scope_parts else "global (all facts)"
@@ -204,8 +204,8 @@ async def search_facts(
             else str(created_at)[:16] if created_at else "no-date"
         )
         
-        item_user_id = item.get("user_id")
-        user_tag = f"[User #{item_user_id}]" if item_user_id else "[Global]"
+        item_tg_id= item.get("tg_id")
+        user_tag = f"[User #{item_tg_id}]" if item_tg_id else "[Global]"
         cat_tag = f"[{item.get('category')}]" if item.get("category") else ""
 
         formatted_lines.append(
@@ -218,266 +218,6 @@ async def search_facts(
     header = f"=== Found facts in {search_scope} ({len(formatted_lines)}) ==="
     return f"{header}\n" + "\n".join(formatted_lines)
 
-
-
-# async def search_facts(
-#     query: str, 
-#     facts_category: str = None, 
-#     user_id: int = None, 
-#     limit: int = 10, 
-#     db_memory = None
-# ) -> str:
-#     """Возвращает отформатированный список векторно релевантных фактов"""
-#     if not db_memory:
-#         return "Error: Memory service is not available."
-
-#     # 1. Получаем эмбеддинг поискового запроса
-#     embedding_query = await embedder.get_embedding(query)
-#     if not embedding_query:
-#         logger.error("Failed to generate embedding for search query: %s", query)
-#         return "Error: Could not process search query embedding."
-
-#     # 2. Выполняем векторный поиск в зависимости от фильтров
-#     search_scope = "global"
-#     if user_id:
-#         search_scope = f"user #{user_id}"
-#         facts: list[dict] = await db_memory.get_vector_by_user_id(
-#             user_id=int(user_id), embedding=embedding_query, n=int(limit)
-#         )
-#     elif facts_category and facts_category.strip():
-#         cat_clean = facts_category.strip()
-#         search_scope = f"category '{cat_clean}'"
-#         facts: list[dict] = await db_memory.get_vector_by_category(
-#             category=cat_clean, embedding=embedding_query, n=int(limit)
-#         )
-#     else:
-#         facts: list[dict] = await db_memory.get_vector_by_jumis(
-#             embedding=embedding_query, n=int(limit)
-#         )
-
-#     if not facts:
-#         logger.info("No vector facts found for query in scope [%s]", search_scope)
-#         return f"No relevant facts found for query in {search_scope}."
-
-#     # 3. Форматируем найденные факты
-#     formatted_lines = []
-
-#     for item in facts:
-#         content = item.get("content", "").strip()
-#         if not content:
-#             continue
-
-#         fact_id = item.get("id", "N/A")
-
-#         # Форматирование даты
-#         created_at = item.get("created_at") or item.get("updated_at")
-#         if isinstance(created_at, datetime):
-#             date_str = created_at.strftime("%Y-%m-%d %H:%M")
-#         elif created_at:
-#             date_str = str(created_at)[:16]
-#         else:
-#             date_str = "no-date"
-
-#         # Метки владельца и категории
-#         item_user_id = item.get("user_id")
-#         user_tag = f"[User #{item_user_id}]" if item_user_id else "[Global]"
-        
-#         category = item.get("category")
-#         cat_tag = f"[{category}]" if category else ""
-
-#         # Собираем красивую и сжатую строку
-#         formatted_lines.append(
-#             f"• Fact #{fact_id} ({date_str}) {user_tag} {cat_tag}: {content}"
-#         )
-
-#     if not formatted_lines:
-#         return f"No valid facts found in {search_scope}."
-
-#     header = f"=== Found facts in {search_scope} ({len(formatted_lines)}) ==="
-#     return f"{header}\n" + "\n".join(formatted_lines)
-
-
-
-# async def search_facts(query: str, facts_category: str = "", user_id: int = None, limit: int = 10,  db_memory = None) -> str:
-#     """Возвращает отформатированный список фактов векторно релевантный по категории или пользователю с максимальным количеством"""
-#     if not db_memory:
-#         return "Error: Memory service is not available."
-
-#     # Пока что не уверен, но допустим что, если нет категории и юзер айди то ищет по всему 
-#     # или только по системным фактам..
-#     # if not facts_category and not user_id:
-#     #     logger.warning("Attempted to fetch facts with an empty category or user id.")
-#     #     return "No facts found: Category or user id was not specified."
-
-#     embedding_query = await embedder.get_embedding(query)
-#     if not embedding_query:
-#         log(...)
-#         print("error..")
-#         return "Error get..."
-
-#     if user_id:
-#         facts: list[dict] = await db_memory.get_vector_by_user_id(user_id=str(user_id), embedding=embedding_query, n=limit)
-#     elif facts_category:
-#         cat_clean = facts_category.strip()
-#         facts: list[dict] = await db_memory.get_vector_by_category(category=cat_clean, embedding=embedding_query, n=limit)
-#     else:
-#         facts: list[dict] = await db_memory.get_vector_by_jumis(embedding=embedding_query, n=limit)
-
-
-
-#     if not facts:
-#         logger.info("No facts found")
-#         return "No facts stored"
-
-#     formatted_lines = []
-    
-#     for item in facts:
-#         fact_text = ""
-#         content = item.get("content", "").strip()
-#         if not content:
-#             continue
-
-#         fact_id = fact_id + f"[Content: #{content}"
-
-#         # 1. Извлекаем ID факта из записи БД
-#         fact_id = item.get("id", "N/A")
-#         fact_text = fact_text + f"[Id: #{fact_id}]"
-
-#         # 2. Дата без миллисекунд и секунд
-#         created_at = item.get("created_at")
-#         if isinstance(created_at, datetime):
-#             date_str = created_at.strftime("%Y-%m-%d %H:%M")
-#         elif created_at:
-#             date_str = str(created_at)[:16]
-#             fact_text = fact_text + f"Date: #{date_str}" 
-#         else:
-#             date_str = "no-date"
-
-#         # 3. Метка владельца
-#         user_id = item.get("user_id")
-#         if user_id:
-#             fact_text = fact_text + f"[User #{user_id}]"
-
-#         category = item.get("category")
-#         if category:
-#             fact_text = fact_text + f"[Category #{category}]"
-
-#         # 5. Собираем итоговую строчку с Fact #ID
-#         formatted_lines.append(f"• Fact #{fact_text}")
-
-#     if not formatted_lines:
-#         return f"No valid facts found in category '{cat_clean}'."
-
-#     header = f"=== Stored facts in '{cat_clean}' ({len(formatted_lines)}) ==="
-#     return f"{header}\n" + "\n".join(formatted_lines)
-
-    
-
-# async def facts_by_cat(facts_category: str, db_memory = None) -> str:
-#     """Возвращает отформатированный список фактов категории с их ID и флагом наличия вектора."""
-#     if not db_memory:
-#         return "Error: Memory service is not available."
-
-#     if not facts_category or not facts_category.strip():
-#         logger.warning("Attempted to fetch facts with an empty category.")
-#         return "No facts found: Category was not specified."
-
-#     cat_clean = facts_category.strip()
-#     facts: list[dict] = await db_memory.get_facts_by_category(cat_clean)
-
-#     if not facts:
-#         logger.info("No facts found for category: '%s'", cat_clean)
-#         return f"No facts stored in category '{cat_clean}'."
-
-#     formatted_lines = []
-    
-#     for item in facts:
-#         content = item.get("content", "").strip()
-#         if not content:
-#             continue
-
-#         # 1. Извлекаем ID факта из записи БД
-#         fact_id = item.get("id", "N/A")
-
-#         # 2. Дата без миллисекунд и секунд
-#         created_at = item.get("created_at")
-#         if isinstance(created_at, datetime):
-#             date_str = created_at.strftime("%Y-%m-%d %H:%M")
-#         elif created_at:
-#             date_str = str(created_at)[:16]
-#         else:
-#             date_str = "no-date"
-
-#         # 3. Метка владельца
-#         user_id = item.get("user_id")
-#         owner_tag = f"[User #{user_id}]" if user_id else "[Global]"
-
-#         # 4. Флаг наличия эмбеддинга (True / False)
-#         has_vector = bool(item.get("embedding"))
-#         vec_tag = "[vec: true]" if has_vector else "[vec: false]"
-
-#         # 5. Собираем итоговую строчку с Fact #ID
-#         formatted_lines.append(f"• Fact #{fact_id} ({date_str}) {owner_tag} {vec_tag} {content}")
-
-#     if not formatted_lines:
-#         return f"No valid facts found in category '{cat_clean}'."
-
-#     header = f"=== Stored facts in '{cat_clean}' ({len(formatted_lines)}) ==="
-#     return f"{header}\n" + "\n".join(formatted_lines)
-
-
-
-
-# async def facts_by_user(user_id: int, db_memory = None) -> str:
-#     """Возвращает сжатый и отформатированный список фактов по конкретному user_id с их ID для LLM."""
-#     if not db_memory:
-#         return "Error: Memory service is not available."
-
-#     if not user_id or user_id <= 0:
-#         logger.warning("Attempted to fetch facts with an invalid user_id: %s", user_id)
-#         return "No facts found: Invalid or missing user_id."
-
-#     facts: list[dict] = await db_memory.get_facts_by_user_id(user_id)
-
-#     if not facts:
-#         logger.info("No facts found for user_id: %s", user_id)
-#         return f"No stored facts found for user #{user_id}."
-
-#     formatted_lines = []
-    
-#     for item in facts:
-#         content = item.get("content", "").strip()
-#         if not content:
-#             continue
-
-#         # 1. Извлекаем ID факта из записи БД
-#         fact_id = item.get("id", "N/A")
-
-#         # 2. Дата без секунд и миллисекунд
-#         created_at = item.get("created_at")
-#         if isinstance(created_at, datetime):
-#             date_str = created_at.strftime("%Y-%m-%d %H:%M")
-#         elif created_at:
-#             date_str = str(created_at)[:16]
-#         else:
-#             date_str = "no-date"
-
-#         # 3. Категория факта
-#         category = item.get("category", "general")
-#         cat_tag = f"[{category}]"
-
-#         # 4. Флаг наличия эмбеддинга
-#         has_vector = bool(item.get("embedding"))
-#         vec_tag = "[vec: true]" if has_vector else "[vec: false]"
-
-#         # 5. Собираем строчку: Fact #ID передается прямо перед контекстом
-#         formatted_lines.append(f"• Fact #{fact_id} ({date_str}) {cat_tag} {vec_tag} {content}")
-
-#     if not formatted_lines:
-#         return f"No valid facts found for user #{user_id}."
-
-#     header = f"=== Stored facts for User #{user_id} ({len(formatted_lines)}) ==="
-#     return f"{header}\n" + "\n".join(formatted_lines)
 
 
 
@@ -505,7 +245,7 @@ async def update_fact(
     id: int, 
     content: str = None, 
     facts_category: str = None, 
-    user_id: int = None,
+    tg_id: int = None,
     db_memory = None,
     **kwargs
 ) -> str:
@@ -530,8 +270,8 @@ async def update_fact(
     if facts_category is not None:
         update_fields["category"] = facts_category
 
-    if user_id is not None:
-        update_fields["user_id"] = user_id
+    if tg_id is not None:
+        update_fields["tg_id"] = tg_id
 
     # 3. Дособираем доп. параметры из kwargs (если передали что-то ещё, фильтруя системные ключи)
     FORBIDDEN_KEYS = {"id", "embedding", "created_at"}
@@ -902,6 +642,102 @@ async def search_users(
 
 
 
+#####  MESAGESS  ######
+
+async def msg_search(
+        embedding: list, 
+        tg_id: int = None, 
+        limit: int = 5,
+        db_messages=None,
+        **kwargs  # Защита от лишних аргументов LLM
+) -> str:
+    """Выполняет векторный поиск сообщений и форматирует результат для LLM."""
+    messages: list[dict] = await db_messages.search_similar_messages(
+        embedding=embedding, 
+        tg_id=tg_id, 
+        limit=limit
+    )
+
+    if not messages:
+        logger.info(f"[msg_search] Релевантных сообщений не найдено (tg_id={tg_id}).")
+        return f"No semantically relevant messages found for tg_id={tg_id or 'ALL'}."
+
+    formatted_lines = []
+    for m in messages:
+        msg_id = m.get("id", "N/A")
+        tg_msg_id = m.get("tg_msg_id", "N/A")
+        role = m.get("role", "unknown")
+        msg_type = m.get("msg_type", "text")
+        
+        created_at = m.get("created_at")
+        time_str = created_at.strftime("%Y-%m-%d %H:%M") if hasattr(created_at, "strftime") else str(created_at or "N/A")
+
+        raw_content = m.get("content") or "[No text content]"
+        clean_content = raw_content.replace("\n", " ").strip()
+
+        formatted_lines.append(
+            f"• [ID: {msg_id} | TG_MSG: {tg_msg_id} | Role: {role} | Time: {time_str} | Type: {msg_type}]\n"
+            f"  Content: \"{clean_content}\""
+        )
+
+    header = f"=== Found Similar Messages ({len(formatted_lines)}) ==="
+    return f"{header}\n" + "\n\n".join(formatted_lines)
+
+
+
+
+async def msg_range(
+        tg_id: int, 
+        start_id: int = None, 
+        end_id: int = None, 
+        limit: int = 20,
+        db_messages=None,
+        **kwargs  # Защита от лишних аргументов LLM
+) -> str:
+    """
+    Вытаскивает диапазон сообщений по ID (start_id - end_id) или последние N сообщений,
+    и форматирует результат для LLM.
+    """
+
+    messages: list[dict] = await db_messages.get_messages_context(
+        tg_id=tg_id,
+        start_id=start_id,
+        end_id=end_id,
+        limit=limit
+    )
+
+    if not messages:
+        logger.info(f"[msg_range] Сообщения не найдены для tg_id={tg_id} (range: {start_id}..{end_id}).")
+        return f"No messages found for tg_id={tg_id}."
+
+    formatted_lines = []
+    for m in messages:
+        msg_id = m.get("id", "N/A")
+        tg_msg_id = m.get("tg_msg_id", "N/A")
+        role = m.get("role", "unknown")
+        msg_type = m.get("msg_type", "text")
+        
+        created_at = m.get("created_at")
+        time_str = created_at.strftime("%Y-%m-%d %H:%M") if hasattr(created_at, "strftime") else str(created_at or "N/A")
+
+        raw_content = m.get("content") or "[No text content]"
+        clean_content = raw_content.replace("\n", " ").strip()
+
+        formatted_lines.append(
+            f"• [ID: {msg_id} | TG_MSG: {tg_msg_id} | Role: {role} | Time: {time_str} | Type: {msg_type}]\n"
+            f"  Content: \"{clean_content}\""
+        )
+
+    if start_id is not None and end_id is not None:
+        header = f"=== Dialog Range ID {start_id}..{end_id} ({len(formatted_lines)} msgs) ==="
+    else:
+        header = f"=== Recent Messages ({len(formatted_lines)}) ==="
+
+    return f"{header}\n" + "\n\n".join(formatted_lines)
+
+
+
+
 
 FUNCTIONS = {
 
@@ -959,9 +795,9 @@ FUNCTIONS = {
                     # "enum": ["fact", "preference", "hardware", "agreement", "global_rule"], само подставит
                     "description": "Functional classification of the stored memory."
                 },
-                "user_id": {
+                "tg_id": {
                     "type": "integer", 
-                    "description": "Target client ID. Omit if storing a global system instruction or personal rule for Jumis."
+                    "description": "Target Telegram user ID. Omit if storing a global system instruction or personal rule for Jumis."
                 }
             },
             "required": ["content", "facts_category"]
@@ -987,9 +823,9 @@ FUNCTIONS = {
                     # "enum": ["fact", "preference", "hardware", "agreement", "global_rule"], само подставит
                     "description": "New functional facts_category for the fact."
                 },
-                "user_id": {
+                "tg_id": {
                     "type": "integer", 
-                    "description": "User ID. Omit or pass null if this fact becomes a global system rule."
+                    "description": "Telegram User ID. Omit or pass null if this fact becomes a global system rule."
                 }
             },
             "required": ["id"]
@@ -1011,9 +847,9 @@ FUNCTIONS = {
                     # Динамический enum подставится автоматически через get_tools_for_agent
                     "description": "Optional category name to filter search results."
                 },
-                "user_id": {
+                "tg_id": {
                     "type": "integer",
-                    "description": "Optional user ID to search facts specific to a user."
+                    "description": "Optional user Telegram ID to search facts specific to a user."
                 },
                 "limit": {
                     "type": "integer",
@@ -1170,6 +1006,59 @@ FUNCTIONS = {
                 }
             },
             "required": []
+        }
+    },
+
+    "msg_search": {
+        "description": "Perform semantic vector search across chat messages to find contextually relevant conversation history.",
+        "function": msg_search,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "embedding": {
+                    "type": "array",
+                    "items": {
+                        "type": "number"
+                    },
+                    "description": "768-dimensional query vector generated from the search text."
+                },
+                "tg_id": {
+                    "type": "integer",
+                    "description": "Target Telegram user ID to filter messages. Omit or set to null to search across all user records."
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum number of semantically relevant messages to return (default: 5)."
+                }
+            },
+            "required": ["embedding"]
+        }
+    },
+
+    "msg_range": {
+        "description": "Retrieve a sequential range of messages by database IDs or fetch the latest N messages for a specific user.",
+        "function": msg_range,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "tg_id": {
+                    "type": "integer",
+                    "description": "Telegram user ID whose chat history is being requested."
+                },
+                "start_id": {
+                    "type": "integer",
+                    "description": "Starting message database ID (inclusive) for slicing the dialog window."
+                },
+                "end_id": {
+                    "type": "integer",
+                    "description": "Ending message database ID (inclusive) for slicing the dialog window."
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Fallback limit for the number of latest messages to fetch if start_id and end_id are omitted (default: 20)."
+                }
+            },
+            "required": ["tg_id"]
         }
     },
 

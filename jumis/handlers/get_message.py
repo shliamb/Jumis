@@ -425,35 +425,18 @@ async def handle_message(message: types.Message, bot: Bot, llm):
     
     message_text = None
 
-    # Обработка разных типов сообщений (STT, voice, text...)
     if message.content_type == "voice":
-        file_id = message.voice.file_id
-        
-        file = None
-        for attempt in range(1, 4):
-            try:
-                file = await bot.get_file(file_id)
-                break  
-            except Exception as e:
-                logger.warning(f"Сетевой сбой при get_file (попытка {attempt}/3): {e}")
-                if attempt == 3:
-                    await message.answer("❌ Проблемы со связью. Не удалось загрузить голосовое, попробуй еще раз.")
-                    return
-                await asyncio.sleep(1.5) 
+        # Вызываем абстрактный метод класса:
+        message_text = await stt.transcribe_telegram_voice(bot, message.voice.file_id)
 
-        audio_bytes = None
-        for attempt in range(1, 4):
-            try:
-                audio_bytes = await bot.download_file(file.file_path)
-                break
-            except Exception as e:
-                logger.warning(f"Сетевой сбой при download_file (попытка {attempt}/3): {e}")
-                if attempt == 3:
-                    await message.answer("❌ Ошибка скачивания аудиофайла из-за сетевого сбоя.")
-                    return
-                await asyncio.sleep(1.5)
+        if not message_text:
+            await message.answer(
+                "❌ Проблемы со связью или ошибками скачивания. Попробуй ещё раз."
+            )
+            return
 
-        message_text = await stt.transcribe(audio_bytes.read(), ".ogg")
+        # Готово! В message_text лежит распознанный текст
+        # print(f"Расшифровка: {message_text}")
 
         MAX_LEN = 4096
         prefix = "🎤 Распознано:\n"

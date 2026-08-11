@@ -86,9 +86,17 @@ async def main_bot() -> None:
 
     dp["db_users"] = db_users # для хендлера start ..
 
+    # Инициализация очереди и сообщений
+    queue_messages = asyncio.Queue()
+    db_messages = DBMessages()
+
 
     # Инициализация LLM Воркера и передача в aiogram workflow_data
-    llm = LLMWorker(db_memory=db_memory, db_users=db_users)
+    llm = LLMWorker(
+        db_memory=db_memory, 
+        db_users=db_users, 
+        db_messages=db_messages
+    )
     dp["llm"] = llm  # Доступен во всех хэндлерах через `llm` или контекст
 
 
@@ -109,14 +117,10 @@ async def main_bot() -> None:
         print("Не удалось создать экземпляр бота! Завершение работы.")
         return
 
-    # Инициализация очереди
-    queue_messages = asyncio.Queue()
-
-    # Инициализация сервисов
-    dbmessages = DBMessages()
+    # Инициализация Telethon и входящего обработчика
     mytelethon = myTelethon(queue_messages)
     ingestion_worker = IngestionWorker(
-        dbmessages=dbmessages,
+        db_messages=db_messages,
         queue=queue_messages
     )
 

@@ -33,12 +33,13 @@ class myTelethon:
 
 
 
-    def detect_media_info(self, event) -> dict:
+    async def detect_media_info(self, event) -> dict:
         """Определяет точный тип медиафайла и извлекает первичные данные."""
         if not event.media:
             return {"msg_type": "text", "media_file_id": None, "media_name": None}
 
         media = event.media
+        audio_bytes = None
 
         if isinstance(media, types.MessageMediaPhoto):
             return {
@@ -64,17 +65,23 @@ class myTelethon:
                     elif isinstance(attr, types.DocumentAttributeFilename):
                         media_name = attr.file_name
 
+            # Если сообщение содержит голосовое или аудио
+            if event.message.voice or event.message.audio:
+                # Telethon скачивает файл ПРЯМО В ОПЕРАТИВКУ
+                audio_bytes = await event.message.download_media(file=bytes)
+
             return {
                 "msg_type": msg_type,
                 "media_file_id": str(getattr(doc, "id", None)),
                 "media_name": media_name,
+                "audio_bytes": audio_bytes
             }
 
         if isinstance(media, types.MessageMediaContact):
             return {
                 "msg_type": "contact",
                 "media_file_id": None,
-                "media_name": media.phone_number,
+                "media_name": getattr(media, "phone_number", None),
             }
 
         if isinstance(media, types.MessageMediaGeo) or isinstance(
@@ -170,7 +177,7 @@ class myTelethon:
             }
 
             # 7. Детализация медиа (если есть)
-            media_info = self.detect_media_info(event)
+            media_info = await self.detect_media_info(event)
 
             # 8. Полный пакет данных сообщения
             message_payload = {

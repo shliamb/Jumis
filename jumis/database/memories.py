@@ -114,10 +114,10 @@ class DBMemories():
         return [dict(rec) for rec in records] if records else []
 
 
-    async def get_facts_by_user_id(self, user_id: int) -> list:
+    async def get_facts_by_user_id(self, tg_id: int) -> list:
         """Забрать факты пользователя"""
-        query = "SELECT * FROM memories WHERE user_id = $1 ORDER BY id DESC"
-        records = await self.db.fetch(query, user_id)
+        query = "SELECT * FROM memories WHERE tg_id = $1 ORDER BY id DESC"
+        records = await self.db.fetch(query, tg_id)
         return [dict(rec) for rec in records] if records else []
 
 
@@ -125,7 +125,7 @@ class DBMemories():
     async def search_vectors(
             self, 
             embedding: list, 
-            user_id: int = None, 
+            tg_id: int = None, 
             category: str = None, 
             limit: int = 10,
             min_similarity: float = 0.75  # <-- ПОРОГ КАЧЕСТВА (0.0 - 1.0)
@@ -134,14 +134,14 @@ class DBMemories():
             emb_str = str(embedding)
             
             # 1. Формируем условия фильтрации
-            conditions = [f"(1 - (embedding <=> $1::vector)) >= ${2}"]  # $2 — min_similarity
+            conditions = ["(1 - (embedding <=> $1::vector)) >= $2"]  # $2 — min_similarity
             params = [emb_str, min_similarity]
             
             param_idx = 3
             
-            if user_id is not None:
-                conditions.append(f"user_id = ${param_idx}")
-                params.append(user_id)
+            if tg_id is not None:
+                conditions.append(f"tg_id = ${param_idx}")
+                params.append(tg_id)
                 param_idx += 1
                 
             if category and category.strip():

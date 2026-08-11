@@ -1,6 +1,7 @@
 # jumis/ingest/worker.py
 import asyncio
 from vector import embedder
+from stt_sense import stt
 from logs.set_logger import set_logger
 
 logger = set_logger(name="ingest")
@@ -9,8 +10,8 @@ logger = set_logger(name="ingest")
 
 
 class IngestionWorker:
-    def __init__(self, dbmessages, queue: asyncio.Queue):
-        self.dbmessages = dbmessages
+    def __init__(self, db_messages, queue: asyncio.Queue):
+        self.db_messages = db_messages
         self.embedder = embedder
         self.queue = queue
         # Множество для хранения ссылок на активные фоновые задачи (защита от GC в Python 3.11+)
@@ -48,13 +49,8 @@ class IngestionWorker:
                 logger.error(f"[BG Embedding] Failed to generate embedding for message_id={message_id}")
                 return
 
-            data = {
-                "id": message_id,
-                "embedding": embedding
-            }
-
             # 2. Обновляем вектор в базе
-            success = await self.dbmessages.update_embedding(message_id=message_id, embedding=embedding)
+            success = await self.db_messages.update_embedding(message_id=message_id, embedding=embedding)
             if success:
                 logger.info(f"[BG Embedding] Message ID {message_id} successfully vectorized and updated.")
             else:
@@ -75,9 +71,25 @@ class IngestionWorker:
             logger.warning("[Ingest] Пропущено сообщение: отсутствует chat_id.")
             return
 
-        # Собираем словарь для DBMessages
         msg_type = msg_info.get("msg_type", "text")
         content = msg_info.get("content")
+        audio_bytes = msg_info.get("audio_bytes")
+
+        # 1. Если это голосовое сообщение — расшифровываем байты из RAM
+        if msg_type == "voice" and audio_bytes:
+            try:
+                logger.info(f"[STT] Расшифровка голосового из RAM для chat_id={chat_id}...")
+                transcribed_text = await stt.transcribe(audio_bytes, file_extension=".ogg")
+                
+                if transcribed_text and transcribed_text.strip():
+                    content = transcribed_text
+                else:
+                    content = "[Голосовое сообщение без речи]"
+            except Exception as e:
+                logger.error(f"[STT] Ошибка расшифровки аудио: {e}")
+                content = "[Ошибка расшифровки голосового]"
+
+        # Собираем словарь для db_messages с расшифрованным текстом
         data_message = {
             "tg_id": chat_id,
             "tg_msg_id": msg_info.get("tg_msg_id"),
@@ -89,22 +101,20 @@ class IngestionWorker:
             "created_at": msg_info.get("created_at"),  # Сохраняем точное время отправки в Telegram
         }
 
-        message_id = await self.dbmessages.add_message(data_message)
+        # 2. Сохраняем в БД
+        message_id = await self.db_messages.add_message(data_message)
         if not message_id:
             logger.error(f"[Ingest] Не удалось сохранить сообщение для chat_id={chat_id}")
             return
 
-        if msg_type == "text":
-            # Регистрируем фоновую задачу в множестве, чтобы GC её не уничтожил
+        # 3. Запускаем векторизацию (работает одинаково и для текста, и для расшифрованного голосового!)
+        if content and not content.startswith("["):
             task = asyncio.create_task(self._background_vectorize(message_id=message_id, content=content))
             self.background_tasks.add(task)
             task.add_done_callback(self.background_tasks.discard)
 
-        if msg_type == "voice":
-            print("soon..")
-        
 
-        logger.info(f"💾 [Ingest] Сообщение id={message_id} (chat_id={chat_id}) сохранено.")
+        logger.info(f"💾 [Ingest] Сообщение id={message_id} (chat_id={chat_id}, type={msg_type}) обработано.")
         #print(f"💾 [Ingest] Сообщение id={message_id} (chat_id={chat_id}) сохранено.")
 
 

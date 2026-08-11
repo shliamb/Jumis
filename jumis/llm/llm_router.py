@@ -28,7 +28,7 @@ litellm.callbacks = [DBTokenLogger()]       # Регистрируем клас�
 
 
 class LLMWorker:
-    def __init__(self, db_memory, db_users):
+    def __init__(self, db_memory, db_users, db_messages):
         ''' Экземпляр работы с LLM через litellm '''
         
         # Проверяем наличие ключей в окружении (не вызовет KeyError, если какого-то ключа пока нет)
@@ -48,6 +48,7 @@ class LLMWorker:
 
         self.db_memory = db_memory
         self.db_users = db_users
+        self.db_messages = db_messages
 
     def _check_env_keys(self):
         """ Безопасная проверка загрузки API-ключей из .env """
@@ -176,6 +177,10 @@ class LLMWorker:
                 # Автоматически подставляем db_users, если функция ждёт напрямую память
                 if 'db_users' in sig.parameters:
                     call_kwargs['db_users'] = self.db_users
+
+                # Автоматически подставляем db_messages, если функция ждёт напрямую память
+                if 'db_messages' in sig.parameters:
+                    call_kwargs['db_messages'] = self.db_messages
 
                 # Вызов в зависимости от типа функции (async/sync)
                 if inspect.iscoroutinefunction(func):

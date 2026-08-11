@@ -55,7 +55,7 @@ def create_tables_in_db():
             phone VARCHAR(50),                             -- Телефон (если поделится контактом)
             
             category VARCHAR(50) DEFAULT 'not_defined'
-              REFERENCES users_categories(name) ON UPDATE CASCADE ON DELETE SET DEFAULT,
+              REFERENCES users_categories(name) ON UPDATE CASCADE ON DELETE RESTRICT,
             
             comment TEXT,                                  -- Твоя личная ручная заметка о человеке
             summary TEXT,                                  -- Краткая выжимка диалога от ИИ для быстрого контекста
@@ -84,14 +84,14 @@ def create_tables_in_db():
         create_table_messages = '''
         -- Таблица сырых сообщений (История диалогов)
         CREATE TABLE IF NOT EXISTS messages (
-            id SERIAL PRIMARY KEY,
+            id BIGSERIAL PRIMARY KEY,
             tg_id BIGINT NOT NULL,                         -- Telegram ID собеседника (ID чата) chat_id = user_id для личных сообщений
             tg_msg_id BIGINT,                              -- ID сообщения внутри Telegram
             
             role VARCHAR(50) NOT NULL,                     -- user (собеседник), assistant (ты/ИИ)
             content TEXT,                                  -- Текст сообщения или транскрибация
             
-            msg_type VARCHAR(50) DEFAULT 'text',           -- text, voice, photo, video и т.д.
+            msg_type VARCHAR(50) DEFAULT 'text',           -- text, photo, video и т.д.
             media_file_id VARCHAR(500),
             media_local_path VARCHAR(1000),
             
@@ -129,11 +129,12 @@ def create_tables_in_db():
 
         create_table_memories = '''
         CREATE TABLE IF NOT EXISTS memories (
-            id SERIAL PRIMARY KEY,
-            user_id INT REFERENCES users(id) ON DELETE CASCADE,
+            id BIGSERIAL PRIMARY KEY,
+            tg_id BIGINT,                                                    -- Telegram ID пользователя
             
             -- Внешняя связь сразу на facts_categories(name)
-            category VARCHAR(50) DEFAULT 'fact' REFERENCES facts_categories(name) ON UPDATE CASCADE ON DELETE SET DEFAULT,
+            category VARCHAR(50) DEFAULT 'fact'
+              REFERENCES facts_categories(name) ON UPDATE CASCADE ON DELETE RESTRICT,
             
             content TEXT NOT NULL,
             embedding VECTOR(768),
@@ -143,7 +144,7 @@ def create_tables_in_db():
         );
 
         -- Индексы
-        CREATE INDEX IF NOT EXISTS idx_memories_user_id ON memories(user_id);
+        CREATE INDEX IF NOT EXISTS idx_memories_tg_id ON memories(tg_id);
         CREATE INDEX IF NOT EXISTS idx_memories_category ON memories(category);
         CREATE INDEX IF NOT EXISTS idx_memories_embedding ON memories USING hnsw (embedding vector_cosine_ops);
         '''
@@ -151,12 +152,12 @@ def create_tables_in_db():
 
 
         create_table_llm_logs = '''
-        -- Таблица учета расходов и использования LLM
+        -- Таблица учета расходов и использования LLM (Жесткая привязка к владельцу/пользователю бота)
         CREATE TABLE IF NOT EXISTS llm_logs (
-            id SERIAL PRIMARY KEY,
+            id BIGSERIAL PRIMARY KEY,
             
             -- Юзер, запустивший запрос (если запрос был в рамках диалога с клиентом, иначе NULL)
-            user_id INT REFERENCES users(id) ON DELETE SET NULL, 
+            tg_id BIGINT REFERENCES users(tg_id) ON DELETE SET NULL, 
             
             -- Использованная модель (например: gemini/gemini-2.5-flash, deepseek/deepseek-chat)
             model VARCHAR(100) NOT NULL,                         
@@ -180,7 +181,7 @@ def create_tables_in_db():
         -- Индексы для быстрой аналитики и построения отчетов
         CREATE INDEX IF NOT EXISTS idx_llm_logs_created_at ON llm_logs(created_at DESC);
         CREATE INDEX IF NOT EXISTS idx_llm_logs_model ON llm_logs(model);
-        CREATE INDEX IF NOT EXISTS idx_llm_logs_user_id ON llm_logs(user_id);
+        CREATE INDEX IF NOT EXISTS idx_llm_logs_tg_id ON llm_logs(tg_id);
         '''
         cursor.execute(create_table_llm_logs)
 
@@ -191,9 +192,9 @@ def create_tables_in_db():
             id SERIAL PRIMARY KEY,
             
             -- Кому принадлежит задача:
-            -- user_id IS NULL  -> Системная задача (например, ночная уборка БД в 02:00)
-            -- user_id = ID     -> Задача для конкретного человека (Алекса или клиента)
-            user_id INT REFERENCES users(id) ON DELETE CASCADE,
+            -- tg_id IS NULL  -> Системная задача (например, ночная уборка БД в 02:00)
+            -- tg_id = tg_id    -> Задача для конкретного человека (Алекса или клиента)
+            tg_id BIGINT REFERENCES users(tg_id) ON DELETE CASCADE,
             
             -- Тип задачи: 'alarm' (будильник), 'reminder' (напоминалка), 'agent_action' (авто-ответ/сообщение), 'system_cron' (ночная уборка)
             task_type VARCHAR(50) NOT NULL DEFAULT 'reminder',

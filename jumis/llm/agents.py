@@ -75,7 +75,11 @@ AGENTS = {
             "get_users",
             "get_user",
             "update_user",
-            "search_users"
+            "search_users",
+
+            # Messages
+            "msg_search",
+            "msg_range"
         ]
     }
 

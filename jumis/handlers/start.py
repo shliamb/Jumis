@@ -84,6 +84,11 @@ async def start_router(message: types.Message, db_users):
     else:
         await message.answer(get_msg("error", lang))
 
+    # 5. Добавить в таблицу llm_logs
+    # Еще не работал с таблицей той, позже сделаю.
+
+
+
 
 
 
