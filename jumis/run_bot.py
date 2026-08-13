@@ -13,6 +13,7 @@ from llm.llm_router import LLMWorker
 from database.memories import DBMemories
 from database.users import DBUsers
 from database.messages import DBMessages
+from response.worker import ResponseWorker
 
 
 import logging
@@ -90,6 +91,9 @@ async def main_bot() -> None:
     queue_messages = asyncio.Queue()
     db_messages = DBMessages()
 
+    # Инициализация очереди сообщений требующих ответов
+    queue_response = asyncio.Queue()
+
 
     # Инициализация LLM Воркера и передача в aiogram workflow_data
     llm = LLMWorker(
@@ -118,17 +122,21 @@ async def main_bot() -> None:
         return
 
     # Инициализация Telethon и входящего обработчика
-    mytelethon = myTelethon(queue_messages)
+    mytelethon = myTelethon(
+        queue_messages
+    )
     ingestion_worker = IngestionWorker(
         db_messages=db_messages,
-        queue=queue_messages
+        db_users=db_users,
+        queue_messages=queue_messages,
+        queue_response=queue_response
+    )
+    response_worker = ResponseWorker(
+        queue_response=queue_response, 
+        telethon_client=mytelethon
     )
 
-    # Запуск фоновых задач в событийнном цикле (Event Loop)
-    telethon_task = asyncio.create_task(mytelethon.run(), name="TelethonTask")
-    worker_task = asyncio.create_task(ingestion_worker.run(), name="IngestionWorkerTask")
-
-    print("Бот успешно запущен и готов к приему сообщений.")
+    print("Все сервисы запускаются...")
 
     try:
         while True:
@@ -138,20 +146,22 @@ async def main_bot() -> None:
                     await asyncio.sleep(5)
                     continue
 
-                # Запускаем бота и Telethon одновременно
+                # asyncio.gather сам обернет их в таски и запустит параллельно
                 await asyncio.gather(
                     dp.start_polling(dp.bot, skip_updates=False),
-                    telethon_task
-                    # messages_from_workers(llm),
-                    # resend_unconfirmed_tasks(llm)
+                    mytelethon.run(),
+                    ingestion_worker.run(),
+                    response_worker.run()
                 )
 
             except (aiohttp.ClientConnectorError, aiohttp.ClientProxyConnectionError, ProxyError):
+                # Перепроверить позже, чую там пизда..
                 print("Прокси ошибка, переподключаемся...")
                 await bot_instance.reconnect()
                 dp.bot = bot_instance.bot
                 await asyncio.sleep(5)
             except Exception as e:
+                # Перепроверить позже, чую там пизда..
                 print(f"Другая ошибка: {e}")
                 await bot_instance.reconnect()
                 dp.bot = bot_instance.bot
@@ -160,28 +170,20 @@ async def main_bot() -> None:
                 print("📢 Бот получил сигнал остановки")
                 raise
 
-    # finally:
-    #     print("🔒 Закрываем пул БД...")
-    #     await db.close()
     finally:
-        # Безопасное завершение всех фоновых процессов при остановке (Graceful Shutdown)
-        print("Остановка всех сервисов и завершение работы...")
+        print("Остановка сервисов и очистка ресурсов...")
 
-        # Отменяем таску Telethon
-        if not telethon_task.done():
-            telethon_task.cancel()
-            try:
-                await telethon_task
-            except asyncio.CancelledError:
-                print("Фоновая таска Telethon успешно остановлена.")
+        # 1. Отключаем клиент Telethon
+        await mytelethon.stop() # или await mytelethon.client.disconnect()
 
-        # Закрываем сессию бота
-        if dp.bot:
+        # 2. Закрываем HTTP-сессию Aiogram бота
+        if dp.bot and dp.bot.session:
             await dp.bot.session.close()
 
-        # Закрываем пул соединений БД
-        await db.disconnect()
-        print("Соединение с БД закрыто. Завершение работы выполнено корректно.")
+        # 3. Закрываем пул подключений к PostgreSQL (asyncpg)
+        await db.close()
+
+        print("Все соединения закрыты. Завершение работы выполнено успешно.")
 
 
 if __name__ == "__main__":

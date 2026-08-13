@@ -25,7 +25,7 @@ AGENTS = {
             "write_fact:\n"
             "   - `write_fact` Criteria: Information holds long-term value for future sessions, or an explicit user request is made. Ephemeral dialogue context is ignored.\n"
             "   - Autonomy: Executed immediately and silently without user confirmation.\n"
-            "   - Validation: Text claims of saving memory are invalid without a matching `tool_call` in the same response.\n\n"
+            "   - Validation: Text claims of saving memory are invalid without a matching `tool_call` in the same response.\n"
 
 
 
@@ -78,8 +78,8 @@ AGENTS = {
             "search_users",
 
             # Messages
-            "msg_search",
-            "msg_range"
+            # "msg_search",
+            # "msg_range"
         ]
     }
 

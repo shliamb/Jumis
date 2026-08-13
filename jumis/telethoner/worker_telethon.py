@@ -329,7 +329,11 @@ class myTelethon:
 
 
 
-
+    async def stop(self):
+            """Мягко отключает Telethon клиент от Telegram."""
+            if self.client and self.client.is_connected():
+                await self.client.disconnect()
+                print("[Telethon] Соединение с Telegram успешно закрыто.")
 
 
 

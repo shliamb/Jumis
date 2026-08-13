@@ -87,15 +87,46 @@ class DBUsers():
     ####### USERS #######
 
 
+    async def chek_tg_id(self, tg_id: int):
+        """ ... """
+        query = "INSERT INTO users (tg_id) VALUES ($1) ON CONFLICT (tg_id) DO NOTHING"
+        return await self.db.execute(query, tg_id) or False
+
+
+
+    # async def add_user(self, user_data: dict) -> bool:
+    #     """Добавить пользователя"""
+    #     keys = list(user_data.keys())
+    #     values = list(user_data.values())
+        
+    #     columns = ", ".join(keys)
+    #     placeholders = ", ".join([f"${i+1}" for i in range(len(values))])
+        
+    #     query = f"INSERT INTO users ({columns}) VALUES ({placeholders})"
+        
+    #     try:
+    #         await self.db.execute(query, *values)
+    #         return True
+    #     except Exception as e:
+    #         logger.error(f"Error adding user: {e}")
+    #         return False
+
+
     async def add_user(self, user_data: dict) -> bool:
-        """Добавить пользователя"""
+        """Добавить пользователя (игнорирует, если tg_id уже существует)."""
+
         keys = list(user_data.keys())
         values = list(user_data.values())
         
         columns = ", ".join(keys)
         placeholders = ", ".join([f"${i+1}" for i in range(len(values))])
         
-        query = f"INSERT INTO users ({columns}) VALUES ({placeholders})"
+        # Добавили ON CONFLICT (tg_id) DO NOTHING
+        query = f"""
+            INSERT INTO users ({columns}) 
+            VALUES ({placeholders}) 
+            ON CONFLICT (tg_id) DO NOTHING; -- если такой tg_id в базе есть, то ничего не делает
+        """
         
         try:
             await self.db.execute(query, *values)

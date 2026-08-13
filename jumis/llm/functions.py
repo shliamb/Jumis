@@ -645,15 +645,21 @@ async def search_users(
 #####  MESAGESS  ######
 
 async def msg_search(
-        embedding: list, 
+        query: str, 
         tg_id: int = None, 
         limit: int = 5,
         db_messages=None,
         **kwargs  # Защита от лишних аргументов LLM
 ) -> str:
     """Выполняет векторный поиск сообщений и форматирует результат для LLM."""
+
+    embedding_query = await embedder.get_embedding(query)
+    if not embedding_query:
+        logger.error("Failed to generate embedding for query: %s", query)
+        return "Error: Could not process search query embedding."
+
     messages: list[dict] = await db_messages.search_similar_messages(
-        embedding=embedding, 
+        embedding=embedding_query, 
         tg_id=tg_id, 
         limit=limit
     )
@@ -1015,12 +1021,9 @@ FUNCTIONS = {
         "schema": {
             "type": "object",
             "properties": {
-                "embedding": {
-                    "type": "array",
-                    "items": {
-                        "type": "number"
-                    },
-                    "description": "768-dimensional query vector generated from the search text."
+                "query": {
+                    "type": "string",
+                    "description": "Search text query or phrase to find contextually and semantically similar messages."
                 },
                 "tg_id": {
                     "type": "integer",
@@ -1031,7 +1034,7 @@ FUNCTIONS = {
                     "description": "Maximum number of semantically relevant messages to return (default: 5)."
                 }
             },
-            "required": ["embedding"]
+            "required": ["query"]
         }
     },
 
