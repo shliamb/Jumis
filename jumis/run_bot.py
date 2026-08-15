@@ -1,14 +1,14 @@
 # ! jumi/run_bot.py
 import asyncio
 import aiohttp
-from datetime import datetime
-import json
+# from datetime import datetime
+# import json
 from aiogram import Router
 from config import TELEGRAM_BOT_TOKEN, USE_PROXY
 from proxy.socks5proxy import SOCKS5PROXY_STRINGS
 from bot_instance import AioBot
 from python_socks._errors import ProxyError
-from utils.serialize import serialize_for_json
+# from utils.serialize import serialize_for_json
 from llm.llm_router import LLMWorker
 from database.memories import DBMemories
 from database.users import DBUsers
@@ -132,6 +132,7 @@ async def main_bot() -> None:
         queue_response=queue_response
     )
     response_worker = ResponseWorker(
+        bot=dp.bot,
         queue_response=queue_response, 
         telethon_client=mytelethon
     )

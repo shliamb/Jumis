@@ -278,54 +278,116 @@ class myTelethon:
                 await asyncio.sleep(1)
 
 
-    # Тут будет другая логика совершеннно!!!!
+    @staticmethod
+    def _split_text_smart(text: str, max_length: int = 4000) -> list[str]:
+        """Разбивает текст по абзацам или предложениям, не превышая max_length."""
+        if len(text) <= max_length:
+            return [text]
+
+        chunks = []
+        while text:
+            if len(text) <= max_length:
+                chunks.append(text)
+                break
+
+            # Ищем естественные границы: сначала двойной перенос, потом одинарный, потом пробел
+            split_pos = text.rfind("\n\n", 0, max_length)
+            if split_pos == -1:
+                split_pos = text.rfind("\n", 0, max_length)
+            if split_pos == -1:
+                split_pos = text.rfind(" ", 0, max_length)
+            if split_pos == -1:
+                split_pos = max_length  # Если нет пробелов, режем по лимиту
+
+            chunks.append(text[:split_pos].strip())
+            text = text[split_pos:].strip()
+
+        return chunks
+
 
     async def send_message(self, message_text: str, telegram_id: int = None, username: str = None):
-            """Отправить сообщение клиенту от моего личного имени через Telethon"""
+        """Отправить сообщение клиенту от моего личного имени через Telethon."""
 
-            if not message_text:
-                return "Ошибка: текст сообщения пуст / Error: message text is empty"
+        if not message_text:
+            return "Ошибка: текст сообщения пуст / Error: message text is empty"
 
-            # Проверяем, инициализирован ли клиент и подключен ли он к серверам
-            if not self.client or not self.client.is_connected():
-                print("❌ Telethon client not connected.")
-                return "❌ Ошибка: сессия Telethon не подключена. / Telethon client not connected."
+        if not self.client or not self.client.is_connected():
+            print("❌ Telethon client not connected.")
+            return "❌ Ошибка: сессия Telethon не подключена. / Telethon client not connected."
 
-            # Определяем приоритетную цель для отправки
-            target = None
-            clean_username = None
+        target = telegram_id or (username.strip().replace("@", "") if username else None)
 
-            if telegram_id:
-                target = telegram_id
-            elif username:
-                clean_username = username.strip().replace("@", "")
-                target = clean_username
+        if not target:
+            return "Ошибка: не указан ни ID, ни Юзернейм / Error: no ID or Username provided"
 
-            if not target:
-                return "Ошибка: не указан ни ID, ни Юзернейм / Error: no ID or Username provided"
+        try:
+            # Умно нарезаем текст, если он превышает лимит MTProto
+            chunks = self._split_text_smart(message_text, max_length=4000)
 
-            try:
-                # Telethon одинаково хорошо принимает в send_message как int(ID), так и str(username)
-                await self.client.send_message(target, message_text)
+            # Отправляем все части последовательно в один диалог
+            for chunk in chunks:
+                await self.client.send_message(target, chunk)
+            
+            if isinstance(target, str):
+                entity = await self.client.get_entity(target)
+                return entity.id
+            
+            return telegram_id
+            
+        except Exception as e:
+            target_log = f"id: {telegram_id}" if telegram_id else f"@{username}"
+            error_msg = f"Не удалось отправить сообщение на {target_log}: {e}"
+            print(error_msg)
+            return f"❌ Ошибка отправки на {target_log}.\nВозможно, у вас нет открытого диалога с пользователем или он вас заблокировал."
+
+
+
+    # async def send_message(self, message_text: str, telegram_id: int = None, username: str = None):
+    #         """Отправить сообщение клиенту от моего личного имени через Telethon"""
+
+    #         if not message_text:
+    #             return "Ошибка: текст сообщения пуст / Error: message text is empty"
+
+    #         # Проверяем, инициализирован ли клиент и подключен ли он к серверам
+    #         if not self.client or not self.client.is_connected():
+    #             print("❌ Telethon client not connected.")
+    #             return "❌ Ошибка: сессия Telethon не подключена. / Telethon client not connected."
+
+    #         # Определяем приоритетную цель для отправки
+    #         target = None
+    #         clean_username = None
+
+    #         if telegram_id:
+    #             target = telegram_id
+    #         elif username:
+    #             clean_username = username.strip().replace("@", "")
+    #             target = clean_username
+
+    #         if not target:
+    #             return "Ошибка: не указан ни ID, ни Юзернейм / Error: no ID or Username provided"
+
+    #         try:
+    #             # Telethon одинаково хорошо принимает в send_message как int(ID), так и str(username)
+    #             await self.client.send_message(target, message_text)
                 
-                target_log = f"id: {telegram_id}" if telegram_id else f"@{clean_username}"
-                #print(f"Сообщение успешно отправлено на {target_log}")
+    #             target_log = f"id: {telegram_id}" if telegram_id else f"@{clean_username}"
+    #             #print(f"Сообщение успешно отправлено на {target_log}")
                 
-                # Если отправляли по юзернейму, то попутно вытягиваем его железный ID для базы данных
-                if clean_username:
-                    entity = await self.client.get_entity(clean_username)
-                    return entity.id # Возвращаем числовой ID
+    #             # Если отправляли по юзернейму, то попутно вытягиваем его железный ID для базы данных
+    #             if clean_username:
+    #                 entity = await self.client.get_entity(clean_username)
+    #                 return entity.id # Возвращаем числовой ID
                 
-                # Если изначально отправляли по ID, возвращаем его же
-                return telegram_id
+    #             # Если изначально отправляли по ID, возвращаем его же
+    #             return telegram_id
                 
-            except Exception as e:
-                target_log = f"id: {telegram_id}" if telegram_id else f"@{clean_username}"
-                error_msg = f"Не удалось отправить сообщение на {target_log}: {e}"
-                print(error_msg)
+    #         except Exception as e:
+    #             target_log = f"id: {telegram_id}" if telegram_id else f"@{clean_username}"
+    #             error_msg = f"Не удалось отправить сообщение на {target_log}: {e}"
+    #             print(error_msg)
                 
-                # Возвращаем понятную мастеру ошибку
-                return f"❌ Ошибка отправки на {target_log}.\nВозможно, у вас нет открытого диалога с пользователем или он вас заблокировал."
+    #             # Возвращаем понятную мастеру ошибку
+    #             return f"❌ Ошибка отправки на {target_log}.\nВозможно, у вас нет открытого диалога с пользователем или он вас заблокировал."
 
 
 

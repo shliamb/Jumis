@@ -1,7 +1,11 @@
 # Главные рабочие инструменты
 litellm==1.93.0
 aiogram==3.29.1
-telethon==1.42.0
+telethon==1.44.0
+
+
+#  - telethon==1.42.0
+#  + telethon==1.44.0
 
 # Работа с базой данных PostgreSQL
 asyncpg==0.29.0

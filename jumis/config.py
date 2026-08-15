@@ -28,6 +28,10 @@ PATH_JSON = "/jumis/json/" if DOCKER else "jumis/json"
 # SYST_CONT_FOLDER = "/" if DOCKER else "../"
 
 
+#### BUFFERING INPUT MESSAGES ####
+BUFFER_IDLE_SEC: int = 30  # Пауза молчания (в сек) перед отправкой накопителя
+
+
 #### LLMs: ####
 
 # DeepSeek:
