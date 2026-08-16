@@ -10,8 +10,9 @@ logger = set_logger(name="response")
 
 
 class ResponseWorker:
-    def __init__(self, bot, queue_response: asyncio.Queue, telethon_client):
+    def __init__(self, bot, queue_response: asyncio.Queue, telethon_client, llm):
         self.bot = bot
+        self.llm = llm
         self.queue = queue_response
         self.telethon_client = telethon_client
         self.admin_id = ADMIN_ID
@@ -65,7 +66,7 @@ class ResponseWorker:
                 await self.telethon_client.send_message(message_text=content, telegram_id=task["chat_id"], username=None)
             return  # В 30-секундный таймер Избранное не пускаем
 
-        # 2. Пропускаем мои личные сообщения
+        # 2. Пропускаем мои личные сообщения, на мои сообщения отвечать не нужно)
         if tg_id == self.admin_id:
             return
 
@@ -105,8 +106,31 @@ class ResponseWorker:
             await asyncio.sleep(2)
 
 
-    async def _run_agent_loop(self):
-        pass
+
+    async def _send_mess_to_subagent(self, tg_id: int, info: dict):
+        """Передача задачи Субагенту (заглушка)"""
+        logger.info(f"[ResponseWorker] Вызов субагента для tg_id={tg_id} (сообщений: {info['quantity']})")
+
+        system, tools = await self.llm.get_tools("tg_inbound_agent")
+        # !!!!!!
+
+        
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    # async def _run_agent_loop(self):
+    #     pass
 
     # async def _execute_agent_loop(self, messages: list, depth: int = 0) -> str:
     #     if depth > 5:  # Защита от бесконечной рекурсии
@@ -125,27 +149,6 @@ class ResponseWorker:
     #         return await self._execute_agent_loop(messages, depth + 1)
             
     #     return response.content
-
-
-    async def _send_mess_to_subagent(self, tg_id: int, info: dict):
-        """Передача задачи Субагенту (заглушка)"""
-        logger.info(f"[ResponseWorker] Вызов субагента для tg_id={tg_id} (сообщений: {info['quantity']})")
-        # Позже здесь будет логика обращения к Субагенту / ЮМИС
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 

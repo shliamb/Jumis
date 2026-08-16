@@ -4,6 +4,7 @@ import copy
 import asyncio
 import litellm
 from litellm import acompletion
+from litellm.exceptions import Timeout, APIError
 from dotenv import load_dotenv
 import inspect
 from typing import AsyncGenerator, AsyncIterator, Tuple, Dict, Any, List, Optional
@@ -13,6 +14,11 @@ from llm.agents import AGENTS
 from llm.functions import FUNCTIONS
 from config import HISTORY_LIMIT
 from llm.token_usege import DBTokenLogger
+from config import LLM_TIMEOUT
+
+from logs.set_logger import set_logger
+
+logger = set_logger(name="llm")
 
 # Подгружаем переменные окружения
 load_dotenv('.env.llm')
@@ -40,11 +46,12 @@ class LLMWorker:
         # "gpt-5"
         # "xai/grok-3-latest"
         self.default_model = "deepseek/deepseek-v4-flash"
+        self.old_dialog: List[Dict[str, Any]] = []
         self.dialog: List[Dict[str, Any]] = []
         self.history_limit = HISTORY_LIMIT
         self.functions = FUNCTIONS
         self.agents = AGENTS
-        self.tool_choice = "auto"
+        self.llm_timeout = LLM_TIMEOUT
 
         self.db_memory = db_memory
         self.db_users = db_users
@@ -58,7 +65,6 @@ class LLMWorker:
             print(f"⚠️ [LLMWorker Warning] Следующие ключи не найдены в .env.llm: {', '.join(missing)}")
 
 
-
     @staticmethod
     async def _error_net(text_err: str):
         """Заглушка для ошибок сети. Возвращает объект в формате ответа API, 
@@ -70,6 +76,19 @@ class LLMWorker:
                     message=SimpleNamespace(
                         content=text_err
                     )
+                )
+            ]
+        )
+
+
+    @staticmethod
+    def _make_stream_chunk(text_err: str):
+        """Формирует имитацию чанка стрима для вывода ошибки в UI."""
+        from types import SimpleNamespace
+        return SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    delta=SimpleNamespace(content=text_err)
                 )
             ]
         )
@@ -127,7 +146,7 @@ class LLMWorker:
         return tools
 
 
-    async def get_tools(self, agent: str = "general_agent") -> tuple:
+    async def get_tools(self, agent: str = "jumis_agent") -> tuple:
             """ Получает системный промпт и tools для указанного агента """
             try:
                 system = self.agents[agent]["system"]
@@ -141,7 +160,7 @@ class LLMWorker:
                     
                     # Позже доделаем память для каждого диалога с пользователем своя + векторизируем..
                     # # Намертво изолируем воспоминания только для главного агента
-                    # if agent == "general_agent":
+                    # if agent == "jumis_agent":
                     #     memories = await self.load_memories()
                     #     if memories:
                     #         system = f"{system.rstrip()}\n\n**Важные воспоминания агента:**\n{memories}"
@@ -199,6 +218,69 @@ class LLMWorker:
         return agent_config
 
 
+
+
+    @staticmethod
+    async def json_validation(dialog: list) -> bool:
+        """
+        Проверяет целостность и валидность структуры диалога.
+        Возвращает True, если диалог чист, или False, если найден битый JSON/структура.
+        """
+        if not isinstance(dialog, list):
+            logger.error("❌ [Validation] Диалог не является списком (list).")
+            return False
+
+        try:
+            # 1. Проверяем общую сериализуемость структуры в JSON
+            json.dumps(dialog, ensure_ascii=False, default=str)
+
+            # 2. Поэлементная проверка сообщений
+            for idx, msg in enumerate(dialog):
+                if not isinstance(msg, dict):
+                    logger.error(f"❌ [Validation] Элемент #{idx} не является словарем.")
+                    return False
+
+                role = msg.get("role")
+                if not role or not isinstance(role, str):
+                    logger.error(f"❌ [Validation] В сообщении #{idx} отсутствует валидное поле 'role'.")
+                    return False
+
+                # 3. Глубокая проверка tool_calls (главное место обрывов)
+                if role == "assistant" and "tool_calls" in msg:
+                    tool_calls = msg.get("tool_calls")
+                    
+                    if tool_calls is not None:
+                        if not isinstance(tool_calls, list):
+                            logger.error(f"❌ [Validation] 'tool_calls' в msg #{idx} не является списком.")
+                            return False
+
+                        for tc_idx, tc in enumerate(tool_calls):
+                            if not isinstance(tc, dict):
+                                logger.error(f"❌ [Validation] Tool call #{tc_idx} в msg #{idx} — не dict.")
+                                return False
+
+                            func = tc.get("function", {})
+                            args = func.get("arguments") if isinstance(func, dict) else None
+
+                            # Парсим строку аргументов инструмента
+                            if isinstance(args, str):
+                                try:
+                                    json.loads(args)
+                                except json.JSONDecodeError as err:
+                                    logger.error(
+                                        f"❌ [Validation] Битый JSON аргументов в msg #{idx} (tool #{tc_idx}): {err}\n"
+                                        f"Строка: {args}"
+                                    )
+                                    return False
+
+            return True
+
+        except Exception as e:
+            logger.error(f"❌ [Validation] Критическая ошибка проверки диалога: {e}")
+            return False
+
+
+
     async def _call_request(
             self,
             system: str,
@@ -207,30 +289,93 @@ class LLMWorker:
             tools: list = None,
             dialog: list = None
         ):
-        """ Чистый вызов LLM через LiteLLM"""
+        """Чистый вызов LLM через LiteLLM с безопасным откатом и поддержкой стрима."""
 
-        messages = [{"role": "system", "content": system}]
-        if dialog is not None:
-            messages.extend(dialog)
-        elif self.dialog:
-            messages.extend(self.dialog)
+        # 1. ВАЛИДАЦИЯ И ОТКАТ НА ВХОДЕ
+        is_subagent = dialog is not None
+        target_dialog = dialog if is_subagent else self.dialog
+
+        if target_dialog is not None:
+            is_valid = await self.json_validation(target_dialog)
+            
+            # Если JSON битый — разделяем реакцию
+            if not is_valid:
+                if not is_subagent:
+                    logger.warning("⚠️ [LLM] Обнаружен битый JSON диалога! Откатываемся к old_dialog.")
+                    self.dialog = copy.deepcopy(self.old_dialog) if self.old_dialog else []
+                    target_dialog = self.dialog
+                else:
+                    logger.warning("⚠️ [LLM] Обнаружен битый JSON диалога для Субагента! Сбрасываем контекст.")
+                    target_dialog = []
+
+        temp_messages = copy.deepcopy(target_dialog) if target_dialog else []
+        temp_messages.append({"role": "system", "content": system})
 
         if question:
-            messages.append({"role": "user", "content": question})
+            temp_messages.append({"role": "user", "content": question})
 
-        print("\ndialog:", json.dumps(messages, indent=2, ensure_ascii=False, default=str))
+        # Сохраняем слепок перед запросом ТОЛЬКО для главного агента
+        backup_dialog = copy.deepcopy(self.dialog) if not is_subagent else None
 
-        # Важно: передаем tools только если они реально есть (не пустой список)
-        actual_tools = tools if tools else None
+        print("\nDIALOG:", json.dumps(temp_messages, indent=2, ensure_ascii=False, default=str), "\n")
 
-        return await acompletion(
-            model=self.default_model,
-            messages=messages,
-            tools=actual_tools,
-            stream=stream,
-            tool_choice=self.tool_choice if actual_tools else None
-        )
+        # 2. ЕСЛИ ВКЛЮЧЕН СТРИМИНГ
+        if stream:
+            async def stream_wrapper():
+                try:
+                    response = await acompletion(
+                        model=self.default_model,
+                        messages=temp_messages,
+                        tools=tools,
+                        stream=True,
+                        timeout=self.llm_timeout
+                    )
 
+                    async for chunk in response:
+                        yield chunk
+
+                    # Если поток дошел до конца — фиксируем успешное состояние Юмис
+                    if not is_subagent:
+                        self.old_dialog = copy.deepcopy(self.dialog)
+
+                except (Timeout, asyncio.TimeoutError):
+                    logger.error("⏳ [LiteLLM] Таймаут ответа (30 сек). Запрос сброшен.")
+                    if not is_subagent and backup_dialog is not None:
+                        self.dialog = copy.deepcopy(backup_dialog)
+                    yield self._make_stream_chunk("\n\n⏳ *[Ошибка: Таймаут ответа сети (30с). Попробуйте еще раз.]*")
+
+                except (json.JSONDecodeError, ValueError) as e:
+                    logger.error(f"⚠️ [LiteLLM] Ошибка структуры JSON: {e}")
+                    if not is_subagent and backup_dialog is not None:
+                        self.dialog = copy.deepcopy(backup_dialog)
+                    yield self._make_stream_chunk("\n\n⚠️ *[Ошибка структуры данных. Запрос отменен, попробуйте еще раз.]*")
+
+                except Exception as e:
+                    logger.error(f"💥 [LiteLLM] Ошибка API/Стриминга: {e}")
+                    if not is_subagent and backup_dialog is not None:
+                        self.dialog = copy.deepcopy(backup_dialog)
+                    yield self._make_stream_chunk(f"\n\n💥 *[Ошибка связи с моделью: {e}]*")
+
+            return stream_wrapper()
+
+        # 3. ЕСЛИ ОБЫЧНЫЙ ВЫЗОВ (без стриминга)
+        try:
+            response = await acompletion(
+                model=self.default_model,
+                messages=temp_messages,
+                tools=tools,
+                stream=False,
+                timeout=self.llm_timeout
+            )
+            if not is_subagent:
+                self.old_dialog = copy.deepcopy(self.dialog)
+            return response
+
+        except Exception as e:
+            logger.error(f"💥 [LiteLLM] Ошибка синхронного запроса: {e}")
+            if not is_subagent and backup_dialog is not None:
+                self.dialog = copy.deepcopy(backup_dialog)
+            return await self._error_net(f"Ошибка сети: {e}")
 
 
 

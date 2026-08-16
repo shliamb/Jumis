@@ -142,7 +142,7 @@ class IngestionWorker:
 
         # Проверка черного/белого списков (пропускается для Избранного)
         if not is_favourites:
-            user_data = await self.db_users.get_user(tg_id=tg_id)
+            user_data = await self.db_users.db_get_user(tg_id=tg_id)
             if not user_data:
                 logger.warning(f"[Ingest] Пользователь tg_id={tg_id} не найден в БД при проверке списков.")
                 return

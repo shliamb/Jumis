@@ -36,7 +36,7 @@ BUFFER_IDLE_SEC: int = 30  # Пауза молчания (в сек) перед 
 
 # DeepSeek:
 # MODEL_DS = "deepseek-chat" #  deepseek-reasoner   deepseek-r1   deepseek-chat - V3   deepseek-vl deepseek-v4-pro deepseek-v4-flash
-TIMEOUT = (5.0, 30.0)
+LLM_TIMEOUT = 30
 HISTORY_LIMIT = 30
 """ 10–15 Строгие узкие ассистенты (только выполнить команду и дать ответ).
     20–30 Идеальный диапазон для Юмис. Естественный разговор + активный тулинг.

@@ -134,7 +134,8 @@ async def main_bot() -> None:
     response_worker = ResponseWorker(
         bot=dp.bot,
         queue_response=queue_response, 
-        telethon_client=mytelethon
+        telethon_client=mytelethon,
+        llm=llm
     )
 
     print("Все сервисы запускаются...")

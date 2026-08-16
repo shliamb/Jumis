@@ -472,7 +472,7 @@ async def handle_message(message: types.Message, bot: Bot, llm):
     # =========================================================================
     msg = None
     try:
-        system, tools = await llm.get_tools("general_agent")
+        system, tools = await llm.get_tools("jumis_agent")
         msg = await message.answer("...")
 
         # Добавляем сообщение пользователя в историю диалога
@@ -576,6 +576,7 @@ async def handle_message(message: types.Message, bot: Bot, llm):
                     
                     # 2. Уведомляем пользователя (Не шлем пустой ответ в Телеграм!)
                     user_alert = "⚠️ Нейросеть задумалась и не смогла выдать ответ из-за сбоя API. Я уже записал это в память, просто повтори вопрос или напиши 'продолжи'."
+                    # Возможно позже стоит перевести на Eng или даже мульти лангв
                     try:
                         await bot.edit_message_text(
                             chat_id=message.chat.id,
@@ -657,7 +658,7 @@ async def handle_message(message: types.Message, bot: Bot, llm):
     # # =========================================================================
     # msg = None
     # try:
-    #     system, tools = await llm.get_tools("general_agent")
+    #     system, tools = await llm.get_tools("jumis_agent")
     #     msg = await message.answer("...")
 
     #     # Добавляем сообщение пользователя в историю диалога
