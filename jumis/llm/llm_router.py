@@ -615,7 +615,7 @@ class LLMWorker:
             question: str = None,
             tools: list = None,
         ) -> dict:
-        """ Простой запрос к LLM с возможным вызовом функций (без стрима) """
+        """Простой запрос к LLM с поддержкой Tool Calls (без стрима)"""
 
         if not system:
             raise ValueError("System content is required")
@@ -631,22 +631,24 @@ class LLMWorker:
         except Exception as e:
             return {'type': 'error', 'content': f"API request failed: {e}"}
 
-        if not response.choices:
-            return {'type': 'error', 'content': "Empty response from API"}
+        # Если _call_request сам обработал ошибку и вернул dict/ошибку вместо объекта response
+        if isinstance(response, dict) and response.get('type') == 'error':
+            return response
+
+        if not hasattr(response, 'choices') or not response.choices:
+            return {'type': 'error', 'content': f"Empty or invalid response from API: {response}"}
 
         message = response.choices[0].message
-        result = {}
-
-        # Текстовый ответ
-        if message.content:
-            result['content'] = message.content
-            result['type'] = 'text'
-        else:
-            result['content'] = ''
-            result['type'] = 'text'
+        
+        result = {
+            'type': 'text',
+            'content': message.content or '',
+            'raw_message': message  # Сохраняем оригинальный объект для истории диалога
+        }
 
         # Вызовы инструментов
-        if message.tool_calls:
+        tool_calls = getattr(message, 'tool_calls', None)
+        if tool_calls:
             result['type'] = 'tool_calls'
             result['tool_calls'] = [
                 {
@@ -654,17 +656,17 @@ class LLMWorker:
                     "type": "function",
                     "function": {
                         "name": tc.function.name,
-                        "arguments": tc.function.arguments
+                        "arguments": tc.function.arguments  # JSON-строка
                     }
                 }
-                for tc in message.tool_calls
+                for tc in tool_calls
             ]
 
         return result
 
 
 
-    # =========
+    ######## LITE LLM  ###########
 
 
 

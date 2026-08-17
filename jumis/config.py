@@ -44,6 +44,10 @@ HISTORY_LIMIT = 30
 # USE_MEM = True
 
 
+# Флаг переключения режимов (по умолчанию новый)
+USE_RICH_MESSAGES = True
+
+
 #### KEYS: ####
 
 load_dotenv()

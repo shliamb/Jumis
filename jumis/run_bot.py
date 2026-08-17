@@ -14,6 +14,7 @@ from database.memories import DBMemories
 from database.users import DBUsers
 from database.messages import DBMessages
 from response.worker import ResponseWorker
+from jumis_agent.jumis_agent import JumisAgent
 
 
 import logging
@@ -94,6 +95,8 @@ async def main_bot() -> None:
     # Инициализация очереди сообщений требующих ответов
     queue_response = asyncio.Queue()
 
+    # Инициализация очереди внутренних сообщений для Jumis Agent
+    queue_req_jum = asyncio.Queue()
 
     # Инициализация LLM Воркера и передача в aiogram workflow_data
     llm = LLMWorker(
@@ -135,8 +138,15 @@ async def main_bot() -> None:
         bot=dp.bot,
         queue_response=queue_response, 
         telethon_client=mytelethon,
+        queue_req_jum=queue_req_jum,
         llm=llm
     )
+    jumis_agent = JumisAgent(
+        bot=dp.bot,
+        llm=llm,
+        queue_req_jum=queue_req_jum
+    )
+    dp["jumis_agent"] = jumis_agent
 
     print("Все сервисы запускаются...")
 
@@ -153,7 +163,8 @@ async def main_bot() -> None:
                     dp.start_polling(dp.bot, skip_updates=False),
                     mytelethon.run(),
                     ingestion_worker.run(),
-                    response_worker.run()
+                    response_worker.run(),
+                    jumis_agent.run_queue_worker()
                 )
 
             except (aiohttp.ClientConnectorError, aiohttp.ClientProxyConnectionError, ProxyError):

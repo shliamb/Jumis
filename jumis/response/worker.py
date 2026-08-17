@@ -1,6 +1,7 @@
 # response/worker.py
 import asyncio
 import time
+import json
 from config import ADMIN_ID, BUFFER_IDLE_SEC
 from logs.set_logger import set_logger
 
@@ -10,16 +11,18 @@ logger = set_logger(name="response")
 
 
 class ResponseWorker:
-    def __init__(self, bot, queue_response: asyncio.Queue, telethon_client, llm):
+    def __init__(self, bot, queue_response: asyncio.Queue, telethon_client, queue_req_jum, llm):
         self.bot = bot
         self.llm = llm
         self.queue = queue_response
+        self.queue_req_jum = queue_req_jum
         self.telethon_client = telethon_client
         self.admin_id = ADMIN_ID
         self.buffer_idle_sec = BUFFER_IDLE_SEC
         self._is_running = False
         self.active_chats = {}  # {tg_id: {"quantity": int, "last_time": float}}
         self._cycle_task = None  # Ссылка на фоновую таску таймера
+        self.active_subagent_tasks = {}  # dict[int, asyncio.Task]
 
 
     async def run(self):
@@ -47,6 +50,16 @@ class ResponseWorker:
             self._cycle_task.cancel()
 
 
+    async def on_owner_reply(self, tg_id: int):
+            """Сбрасывает работу субагента по анализу на ответ, если я сам ответил в ручную"""
+            if tg_id in self.active_subagent_tasks:
+                task = self.active_subagent_tasks[tg_id]
+                if not task.done():
+                    task.cancel()  # Останавливаем рекурсию и вызовы LLM!
+                    logger.info(f"🛑 [ResponseWorker] Субагент для tg_id={tg_id} отменен: владелец ответил сам.")
+                del self.active_subagent_tasks[tg_id]
+
+
     async def _add_mess_circle(self, task: dict):
         """Добавляет или обновляет время и счетчик сообщений для пользователя."""
         tg_id = task.get("tg_id")
@@ -69,6 +82,8 @@ class ResponseWorker:
         # 2. Пропускаем мои личные сообщения, на мои сообщения отвечать не нужно)
         if tg_id == self.admin_id:
             return
+
+        # 3. Возможно нужно фильтрануть любой тип сообщений кроме голосового и текстового, хз..
 
         current_time = time.time()  # Фиксируем локальный timestamp (float)
 
@@ -94,7 +109,13 @@ class ResponseWorker:
                         logger.info(f"[ResponseWorker] Таймаут {self.buffer_idle_sec}с вышел для tg_id={tg_id}. Передаем субагенту.")
 
                         # Отправляем субагенту
-                        await self._send_mess_to_subagent(tg_id=tg_id, info=info)
+                        #await self._analysis_of_incoming_mess(tg_id=tg_id, info=info)
+                        task = asyncio.create_task(
+                            self._run_tg_inbound_agent(tg_id=tg_id, info=info)
+                        )
+
+                        # Сохраняем задачу, чтобы иметь возможность отменить
+                        self.active_subagent_tasks[tg_id] = task
 
                         # Правильное удаление элемента из словаря
                         del self.active_chats[tg_id]
@@ -107,15 +128,103 @@ class ResponseWorker:
 
 
 
-    async def _send_mess_to_subagent(self, tg_id: int, info: dict):
-        """Передача задачи Субагенту (заглушка)"""
+    async def _run_tg_inbound_agent(self, tg_id: int, info: dict):
+        """Передача задачи Субагенту с асинхронным циклом вызова тулов (Agentic Loop)."""
         logger.info(f"[ResponseWorker] Вызов субагента для tg_id={tg_id} (сообщений: {info['quantity']})")
 
         system, tools = await self.llm.get_tools("tg_inbound_agent")
-        # !!!!!!
+        dialog = [{
+            "role": "user", 
+            "content": f"Пользователь tg_id={tg_id} написал {info['quantity']} новых сообщений владельцу."
+        }]
 
-        
+        max_steps = 30  # Страховка от бесконечного цикла временно
+        step = 0
 
+        try:
+
+            while step < max_steps:
+                step += 1
+
+                print(f"\nDIALOG SUB AGENT: {dialog}\n")
+
+                # 1. Запрос к LLM (без стриминга)
+                answer_llm = await self.llm.call_with_tools(
+                    system=system, 
+                    dialog=dialog, 
+                    question=None, 
+                    tools=tools
+                )
+
+                # Обработка сбоя сети / API
+                if answer_llm['type'] == 'error':
+                    logger.error(f"[Subagent] Ошибка LLM: {answer_llm['content']}")
+                    return f"⚠️ Ошибка вызова LLM: {answer_llm['content']}"
+
+                # 2. ФИНАЛ: Модель вернула только текст (анализ завершен)
+                if answer_llm['type'] == 'text':
+                    final_text = answer_llm['content']
+                    dialog.append({"role": "assistant", "content": final_text})
+                    logger.info(f"[Subagent] Анализ завершен за {step} шагов.")
+
+                    # В очередь для Jumis
+                    await self.queue_req_jum.put({
+                        "tg_id": tg_id,
+                        "draft_text": final_text,
+                        "source": "tg_inbound_agent"
+                    })
+
+                    logger.info(f"[Subagent] Передал в очередь Jumis сообщение.")
+                    print(f"[Subagent] Передал в очередь Jumis сообщение.")
+                    return
+
+                # 3. ТУЛЫ: Модель просит вызвать инструменты
+                if answer_llm['type'] == 'tool_calls':
+                    # Шаг 3А: Фиксируем запрос модели в истории (со сгенерированными tool_calls)
+                    dialog.append({
+                        "role": "assistant",
+                        "content": answer_llm.get('content') or "",
+                        "tool_calls": answer_llm['tool_calls']
+                    })
+
+                    # Шаг 3Б: Последовательно вызываем каждый тул и пишем результат в dialog
+                    for tc in answer_llm['tool_calls']:
+                        call_id = tc['id']
+                        func_name = tc['function']['name']
+                        raw_args = tc['function']['arguments']
+
+                        # Парсим аргументы
+                        try:
+                            args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+                        except json.JSONDecodeError:
+                            args = {}
+
+                        logger.info(f"🛠️ [Subagent Step {step}] Вызов {func_name}({args})")
+
+                        # Выполняем тул
+                        try:
+                            result = await self.llm.call_function(func_name, args)
+                            result_str = json.dumps(result, ensure_ascii=False) if not isinstance(result, str) else result
+                        except Exception as e:
+                            logger.error(f"💥 Ошибка тула {func_name}: {e}")
+                            result_str = json.dumps({"error": str(e)}, ensure_ascii=False)
+
+                        # Добавляем результат функции в диалог по стандарту OpenAI/LiteLLM
+                        dialog.append({
+                            "role": "tool",
+                            "tool_call_id": call_id,
+                            "content": result_str
+                        })
+
+            logger.warning(f"[Subagent] Достигнут лимит шагов ({max_steps})")
+            return "⚠️ Субагент превысил лимит шагов и не смог завершить анализ."
+
+        except asyncio.CancelledError:
+            logger.info(f"🚫 Задача субагента для tg_id={tg_id} была успешно отменена.")
+            raise  # Обязательно пробрасываем дальше для корректной остановки task
+        finally:
+            # В конце работы чистим за собой словарь задач
+            self.active_subagent_tasks.pop(tg_id, None)
 
 
 
