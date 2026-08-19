@@ -13,10 +13,10 @@ class DBMessages():
     async def add_message(self, data: dict) -> Optional[int] | None:
         """
         Сохраняет сообщение в базу.
-        В data обязательно должен быть 'tg_id' (ID чата/пользователя).
+        В data обязательно должен быть 'sender_id' (ID чата/пользователя).
         """
-        if "tg_id" not in data or data["tg_id"] is None:
-            logger.error("[DBMessages] Ошибка: tg_id отсутствует в data.")
+        if "sender_id" not in data or data["sender_id"] is None:
+            logger.error("[DBMessages] Ошибка: sender_id отсутствует в data.")
             return None
 
         data_dict = data.copy()
@@ -56,75 +56,56 @@ class DBMessages():
 
 
     async def get_messages_context(
-        self, 
-        tg_id: int, 
-        start_id: int = None, 
-        end_id: int = None, 
-        limit: int = 20
-    ) -> List[Dict[str, Any]]:
-        """
-        Возвращает контекст диалога для агента.
-        Если переданы start_id и end_id, возвращает хронологический промежуток сообщений.
-        Если границы не переданы, работает как фоллбэк: отдает последние 'limit' сообщений.
-        """
-        if start_id is not None and end_id is not None:
-            # Запрос по конкретному диапазону ID
+            self, 
+            start_id: int, 
+            end_id: int
+        ) -> List[Dict[str, Any]]:
+            """
+            Возвращает хронологический срез сообщений по диапазону ID (включительно).
+            """
+            if start_id > end_id:
+                start_id, end_id = end_id, start_id
+
+            # Исключаем поле embedding, чтобы не гонять тяжелые векторы в память
             query = """
-                SELECT id, tg_msg_id, role, content, msg_type, created_at
+                SELECT id, chat_id, sender_id, recipient_id, tg_msg_id, 
+                    direction, content, msg_type, created_at
                 FROM messages
-                WHERE tg_id = $1 AND id >= $2 AND id <= $3
+                WHERE id >= $1 AND id <= $2
                 ORDER BY id ASC;
             """
-            args = (tg_id, start_id, end_id)
-        else:
-            # Классический запрос последних N сообщений
-            query = """
-                SELECT id, tg_msg_id, role, content, msg_type, created_at
-                FROM (
-                    SELECT id, tg_msg_id, role, content, msg_type, created_at
-                    FROM messages
-                    WHERE tg_id = $1
-                    ORDER BY created_at DESC
-                    LIMIT $2
-                ) AS sub
-                ORDER BY created_at ASC;
-            """
-            args = (tg_id, limit)
-
-        try:
-            records = await self.db.fetch(query, *args)
-            return [dict(r) for r in records]
-        except Exception as e:
-            logger.error(f"[DBMessages] Ошибка получения контекста для tg_id={tg_id}: {e}")
-            return []
+            try:
+                records = await self.db.fetch(query, start_id, end_id)
+                return [dict(r) for r in records]
+            except Exception as e:
+                logger.error(f"[DBMessages] Ошибка получения диапазона [{start_id}..{end_id}]: {e}")
+                return []
 
 
     async def search_similar_messages(
             self, 
             embedding: list, 
-            tg_id: int = None, 
+            chat_id: int = None, 
             limit: int = 5,
-            min_similarity: float = 0.75 # <-- ПОРОГ КАЧЕСТВА (0.0 - 1.0)
+            min_similarity: float = 0.75
         ) -> list[dict]:
             """
-            Векторный поиск по сообщениям диалога с порогом отсечения шума (стиль Builder).
+            Векторный поиск по сообщениям диалога с порогом отсечения шума.
             """
             emb_str = str(embedding)
             
-            # 1. Формируем базовые условия фильтрации
-            # $1 — вектор, $2 — минимальная схожесть
+            # 1. Базовые условия фильтрации ($1 — вектор, $2 — минимальная схожесть)
             conditions = [
                 "is_embedded = TRUE",
                 "(1 - (embedding <=> $1::vector)) >= $2"
             ]
             params = [emb_str, min_similarity]
-            
             param_idx = 3
             
-            # Динамически добавляем фильтр по пользователю, если передан
-            if tg_id is not None:
-                conditions.append(f"tg_id = ${param_idx}")
-                params.append(tg_id)
+            # Динамический фильтр по чату
+            if chat_id is not None:
+                conditions.append(f"chat_id = ${param_idx}")
+                params.append(chat_id)
                 param_idx += 1
                 
             params.append(limit)
@@ -132,12 +113,14 @@ class DBMessages():
 
             where_clause = f"WHERE {' AND '.join(conditions)}"
 
-            # 2. Формируем SQL запрос
+            # 2. Формируем SQL запрос (выбираем всё кроме самого столбца embedding)
             query = f"""
-                SELECT *, (1 - (embedding <=> $1::vector)) AS similarity
+                SELECT id, chat_id, sender_id, recipient_id, tg_msg_id, 
+                    direction, content, msg_type, created_at,
+                    (1 - (embedding <=> $1::vector)) AS similarity
                 FROM messages
                 {where_clause}
-                ORDER BY embedding <=> $1::vector
+                ORDER BY embedding <=> $1::vector ASC
                 LIMIT ${limit_param_idx}
             """
             
@@ -145,7 +128,7 @@ class DBMessages():
                 records = await self.db.fetch(query, *params)
                 return [dict(rec) for rec in records] if records else []
             except Exception as e:
-                logger.error(f"[DBMessages] Ошибка векторного поиска (tg_id={tg_id}): {e}")
+                logger.error(f"[DBMessages] Ошибка векторного поиска (chat_id={chat_id}): {e}")
                 return []
 
 

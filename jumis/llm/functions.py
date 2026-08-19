@@ -1,7 +1,9 @@
 # jumis/llm/functions.py
 #from database.users import get_all_users, db_get_user, db_update_user
 import asyncio
+from typing import Any, Dict, List, Optional
 from vector import embedder
+from utils.common import sanitize_human_text
 from datetime import datetime
 from logs.set_logger import set_logger
 logger = set_logger(name="llmfunc")
@@ -449,13 +451,19 @@ async def get_users(db_users=None) -> str:
 
 
 
+
+
 async def get_user(
     user_id: int | None = None,
     tg_id: int | None = None,
     username: str | None = None,
-    db_users=None
+    db_users=None,
+    **kwargs  # Защита от лишних аргументов LLM
 ) -> str:
     """Поиск профиля пользователя по user_id (БД), tg_id или username."""
+    if not db_users:
+        return "Error: Database service 'db_users' is not available."
+
     if not user_id and not tg_id and not username:
         logger.warning("Attempted to call get_user without any identifier.")
         return "Error: Provide at least one identifier (user_id, tg_id, or username)."
@@ -510,16 +518,100 @@ async def get_user(
         lines.append(f"• Category: {category}")
     if lang := data_user.get("lang_code"):
         lines.append(f"• Lang: {lang}")
-    if model_default := data_user.get("model_default"):
-        lines.append(f"• Model: {model_default}")
+    if aliases := data_user.get("aliases"):
+        lines.append(f"• Aliases: {aliases}")
     if comment := data_user.get("comment"):
         lines.append(f"• Comment: {comment}")
     if summary := data_user.get("summary"):
         lines.append(f"• AI Summary: {summary}")
 
+    # Назначенные модели
+    models = []
+    if m_def := data_user.get("model_default"):
+        models.append(f"default={m_def}")
+    if m_cheap := data_user.get("model_cheap"):
+        models.append(f"cheap={m_cheap}")
+    if m_smart := data_user.get("model_smart"):
+        models.append(f"smart={m_smart}")
+    if models:
+        lines.append(f"• Models: {', '.join(models)}")
+
     lines.append(f"• Registered: {date_str}")
 
     return "\n".join(lines)
+
+
+# async def get_user(
+#     user_id: int | None = None,
+#     tg_id: int | None = None,
+#     username: str | None = None,
+#     db_users=None
+# ) -> str:
+#     """Поиск профиля пользователя по user_id (БД), tg_id или username."""
+#     if not user_id and not tg_id and not username:
+#         logger.warning("Attempted to call get_user without any identifier.")
+#         return "Error: Provide at least one identifier (user_id, tg_id, or username)."
+
+#     # Запрашиваем пользователя через единую функцию БД
+#     data_user = await db_users.db_get_user(user_id=user_id, tg_id=tg_id, username=username)
+
+#     if not data_user:
+#         target = f"id={user_id}" if user_id else (f"tg_id={tg_id}" if tg_id else f"username='{username}'")
+#         logger.info("User not found for %s", target)
+#         return f"User not found ({target})."
+
+#     # Извлечение полей
+#     u_id = data_user.get("id")
+#     u_tg_id = data_user.get("tg_id") or "N/A"
+#     u_uname = data_user.get("username")
+#     uname_str = f"@{u_uname}" if u_uname else "no username"
+
+#     # Флаги статуса
+#     flags = []
+#     if data_user.get("is_admin"):
+#         flags.append("ADMIN")
+#     if data_user.get("is_blocked"):
+#         flags.append("BLOCKED")
+#     if data_user.get("is_whitelisted"):
+#         flags.append("WHITELISTED")
+#     if data_user.get("is_bot"):
+#         flags.append("BOT")
+    
+#     flags_str = f" [{', '.join(flags)}]" if flags else ""
+
+#     # Дата регистрации
+#     created_at = data_user.get("created_at")
+#     if isinstance(created_at, datetime):
+#         date_str = created_at.strftime("%Y-%m-%d %H:%M")
+#     elif created_at:
+#         date_str = str(created_at)[:16]
+#     else:
+#         date_str = "no-date"
+
+#     # Формирование ответа
+#     lines = [
+#         f"=== User Profile #{u_id}{flags_str} ===",
+#         f"• TG ID: {u_tg_id} | Username: {uname_str}"
+#     ]
+
+#     if full_name := data_user.get("full_name"):
+#         lines.append(f"• Name: {full_name}")
+#     if phone := data_user.get("phone"):
+#         lines.append(f"• Phone: {phone}")
+#     if category := data_user.get("category"):
+#         lines.append(f"• Category: {category}")
+#     if lang := data_user.get("lang_code"):
+#         lines.append(f"• Lang: {lang}")
+#     if model_default := data_user.get("model_default"):
+#         lines.append(f"• Model: {model_default}")
+#     if comment := data_user.get("comment"):
+#         lines.append(f"• Comment: {comment}")
+#     if summary := data_user.get("summary"):
+#         lines.append(f"• AI Summary: {summary}")
+
+#     lines.append(f"• Registered: {date_str}")
+
+#     return "\n".join(lines)
 
 
 
@@ -645,44 +737,90 @@ async def search_users(
 #####  MESAGESS  ######
 
 async def msg_search(
-        query: str, 
-        tg_id: int = None, 
-        limit: int = 5,
-        db_messages=None,
-        **kwargs  # Защита от лишних аргументов LLM
+    query: str, 
+    chat_id: int = None, 
+    limit: int = 5,
+    db_messages=None,
+    embedder=None,
+    **kwargs  # Защита от лишних аргументов LLM
 ) -> str:
-    """Выполняет векторный поиск сообщений и форматирует результат для LLM."""
+    """
+    Выполняет семантический векторный поиск по истории сообщений в БД
+    и возвращает отформатированный результат для LLM.
+    """
+    if not db_messages:
+        return "Error: Database service 'db_messages' is not available."
 
-    embedding_query = await embedder.get_embedding(query)
-    if not embedding_query:
-        logger.error("Failed to generate embedding for query: %s", query)
+    # Извлечение эмбеддера из аргументов или контекста
+    emb_service = embedder or kwargs.get("embedder")
+    if not emb_service:
+        try:
+            emb_service = globals().get("embedder")
+        except Exception:
+            pass
+
+    if not emb_service:
+        return "Error: Embedding service is not configured."
+
+    try:
+        embedding_query = await emb_service.get_embedding(query)
+    except Exception as e:
+        logger.error(f"[msg_search] Ошибка генерации эмбеддинга для '{query}': {e}")
         return "Error: Could not process search query embedding."
 
+    if not embedding_query:
+        logger.error("[msg_search] Вектор для запроса '%s' не получен.", query)
+        return "Error: Could not process search query embedding."
+
+    # Векторный поиск по таблице messages
     messages: list[dict] = await db_messages.search_similar_messages(
         embedding=embedding_query, 
-        tg_id=tg_id, 
+        chat_id=chat_id, 
         limit=limit
     )
 
     if not messages:
-        logger.info(f"[msg_search] Релевантных сообщений не найдено (tg_id={tg_id}).")
-        return f"No semantically relevant messages found for tg_id={tg_id or 'ALL'}."
+        logger.info(f"[msg_search] Релевантных сообщений не найдено (chat_id={chat_id}).")
+        return f"No semantically relevant messages found for chat_id={chat_id or 'ALL'}."
 
     formatted_lines = []
     for m in messages:
         msg_id = m.get("id", "N/A")
         tg_msg_id = m.get("tg_msg_id", "N/A")
-        role = m.get("role", "unknown")
+        m_chat_id = m.get("chat_id", "N/A")
+        sender_id = m.get("sender_id", "N/A")
         msg_type = m.get("msg_type", "text")
         
-        created_at = m.get("created_at")
-        time_str = created_at.strftime("%Y-%m-%d %H:%M") if hasattr(created_at, "strftime") else str(created_at or "N/A")
+        # Процент схожести
+        similarity = m.get("similarity")
+        sim_str = f" | Sim: {similarity:.2f}" if similarity is not None else ""
+        
+        # Разбор направления согласно CHECK (direction IN ('inbound_peer', 'outbound_owner'))
+        direction = m.get("direction", "")
+        if direction == "inbound_peer":
+            dir_label = "IN (peer)"
+        elif direction == "outbound_owner":
+            dir_label = "OUT (owner)"
+        else:
+            dir_label = direction or "unknown"
 
-        raw_content = m.get("content") or "[No text content]"
-        clean_content = raw_content.replace("\n", " ").strip()
+        # Форматирование даты created_at (TIMESTAMPTZ)
+        created_at = m.get("created_at")
+        time_str = (
+            created_at.strftime("%Y-%m-%d %H:%M")
+            if hasattr(created_at, "strftime")
+            else str(created_at or "N/A")
+        )
+
+        # Обработка контента с учетом типа медиа
+        raw_content = m.get("content")
+        if not raw_content:
+            clean_content = f"[{msg_type.upper()} media content]"
+        else:
+            clean_content = raw_content.replace("\n", " ").strip()
 
         formatted_lines.append(
-            f"• [ID: {msg_id} | TG_MSG: {tg_msg_id} | Role: {role} | Time: {time_str} | Type: {msg_type}]\n"
+            f"• [ID: {msg_id} | TG_MSG: {tg_msg_id} | Chat: {m_chat_id} | Sender: {sender_id} | Dir: {dir_label} | Type: {msg_type} | Time: {time_str}{sim_str}]\n"
             f"  Content: \"{clean_content}\""
         )
 
@@ -693,54 +831,135 @@ async def msg_search(
 
 
 async def msg_range(
-        tg_id: int, 
-        start_id: int = None, 
-        end_id: int = None, 
-        limit: int = 20,
-        db_messages=None,
-        **kwargs  # Защита от лишних аргументов LLM
+    start_id: int,
+    end_id: int,
+    db_messages=None,
+    **kwargs  # Защита от лишних аргументов LLM
 ) -> str:
     """
-    Вытаскивает диапазон сообщений по ID (start_id - end_id) или последние N сообщений,
+    Вытаскивает диапазон сообщений по ID (start_id - end_id)
     и форматирует результат для LLM.
     """
+    if not db_messages:
+        return "Error: Database service 'db_messages' is not available."
+
+    # 1. Защита: переворачиваем ID, если модель передала их задом наперед
+    if start_id > end_id:
+        start_id, end_id = end_id, start_id
+
+    # 2. Защита от раздувания контекста (ограничение до 50 сообщений за раз)
+    max_limit = 50
+    if (end_id - start_id + 1) > max_limit:
+        end_id = start_id + max_limit - 1
 
     messages: list[dict] = await db_messages.get_messages_context(
-        tg_id=tg_id,
         start_id=start_id,
-        end_id=end_id,
-        limit=limit
+        end_id=end_id
     )
 
     if not messages:
-        logger.info(f"[msg_range] Сообщения не найдены для tg_id={tg_id} (range: {start_id}..{end_id}).")
-        return f"No messages found for tg_id={tg_id}."
+        logger.info(f"[msg_range] Сообщения не найдены в диапазоне ({start_id}..{end_id}).")
+        return f"No messages found in range [{start_id}..{end_id}]."
 
     formatted_lines = []
     for m in messages:
         msg_id = m.get("id", "N/A")
         tg_msg_id = m.get("tg_msg_id", "N/A")
-        role = m.get("role", "unknown")
+        chat_id = m.get("chat_id", "N/A")
         msg_type = m.get("msg_type", "text")
         
-        created_at = m.get("created_at")
-        time_str = created_at.strftime("%Y-%m-%d %H:%M") if hasattr(created_at, "strftime") else str(created_at or "N/A")
+        direction = m.get("direction", "")
+        if direction == "inbound_peer":
+            role_str = "IN (peer)"
+        elif direction == "outbound_owner":
+            role_str = "OUT (owner)"
+        else:
+            role_str = m.get("role", "unknown")
 
-        raw_content = m.get("content") or "[No text content]"
+        created_at = m.get("created_at")
+        time_str = (
+            created_at.strftime("%Y-%m-%d %H:%M")
+            if hasattr(created_at, "strftime")
+            else str(created_at or "N/A")
+        )
+
+        raw_content = m.get("content") or f"[{msg_type} without text]"
         clean_content = raw_content.replace("\n", " ").strip()
 
         formatted_lines.append(
-            f"• [ID: {msg_id} | TG_MSG: {tg_msg_id} | Role: {role} | Time: {time_str} | Type: {msg_type}]\n"
+            f"• [ID: {msg_id} | TG_MSG: {tg_msg_id} | Chat: {chat_id} | Dir: {role_str} | Time: {time_str} | Type: {msg_type}]\n"
             f"  Content: \"{clean_content}\""
         )
 
-    if start_id is not None and end_id is not None:
-        header = f"=== Dialog Range ID {start_id}..{end_id} ({len(formatted_lines)} msgs) ==="
-    else:
-        header = f"=== Recent Messages ({len(formatted_lines)}) ==="
-
+    header = f"=== Dialog Range ID {start_id}..{end_id} ({len(formatted_lines)} msgs) ==="
     return f"{header}\n" + "\n\n".join(formatted_lines)
 
+
+
+
+
+###### SEND MESSAGES TELETHONE #####
+
+async def send_mess_peer(peer_id: int, text_mess: str, mytelethon) -> str:
+    """
+    Отправляет прямое сообщение пользователю Telegram через Telethon от имени Владельца.
+    
+    :param peer_id: Telegram ID получателя
+    :param text_mess: Согласованный текст сообщения
+    :param mytelethon: Клиент Telethon
+    :return: Понятный статус выполнения для LLM
+    """
+    if not peer_id or not text_mess or not text_mess.strip():
+        return "Error: Invalid arguments. Both 'peer_id' and non-empty 'text_mess' are required."
+
+    # Жёсткая зачистка ИИ-артефактов перед отправкой
+    clean_text = sanitize_human_text(text_mess)
+
+    if not clean_text:
+        return "Error: Message became empty after cleaning emojis and tags."
+
+    try:
+        answer = await mytelethon.send_message(
+            message_text=clean_text,
+            telegram_id=peer_id,
+            username=None
+        )
+
+        if answer is None:
+            logger.error(f"[send_mess_peer] Failed to send message to {peer_id}: returned None")
+            return f"Error: Message to {peer_id} was not sent (service returned None)."
+
+        if isinstance(answer, int):
+            logger.info(f"[send_mess_peer] Message sent to {peer_id}")
+            return f"Success: Message successfully sent to peer_id {peer_id}."
+
+        if isinstance(answer, str):
+            logger.error(f"[send_mess_peer] Telethon error for {peer_id}: {answer}")
+            return f"Error sending message to {peer_id}: {answer}"
+
+        return f"Success: Message sent to {peer_id}." # ))))
+
+    except Exception as e:
+        logger.error(f"[send_mess_peer] Unexpected error for {peer_id}: {e}", exc_info=True)
+        return f"Fatal error: Exception occurred while sending message: {type(e).__name__} - {str(e)}"
+
+
+
+async def clear_inbox_notifs(jumis_agent=None) -> str:
+    """Clears all pending incoming Telegram message notifications and deletes the notification widget."""
+    if not jumis_agent:
+        return "Error: Agent service is unavailable."
+
+    return await jumis_agent.clear_pending_queue()
+
+
+
+async def get_pending_queue(jumis_agent=None) -> str:
+    """Возвращает текущее состояние очереди неотвеченных сообщений."""
+    if not jumis_agent:
+        return "Error: Agent service is unavailable."
+
+    return await jumis_agent.get_notifs_queue()
 
 
 
@@ -892,22 +1111,22 @@ FUNCTIONS = {
     },
 
     "get_user": {
-        "description": "Retrieves user profile details by internal Database User ID, Telegram ID, or username.",
+        "description": "Retrieves user profile details by internal ID, Telegram ID, username, or semantically searches users by aliases/traits.",
         "function": get_user,
         "schema": {
             "type": "object",
             "properties": {
                 "user_id": {
-                    "type": "integer", 
-                    "description": "Internal database primary key user ID (from get_users list)."
+                    "type": "integer",
+                    "description": "Internal database primary key user ID."
                 },
                 "tg_id": {
-                    "type": "integer", 
+                    "type": "integer",
                     "description": "Telegram user ID."
                 },
                 "username": {
-                    "type": "string", 
-                    "description": "Telegram username (e.g., 'john_doe' or '@john_doe')."
+                    "type": "string",
+                    "description": "Telegram username (e.g. 'john_doe')."
                 }
             },
             "required": []
@@ -1008,7 +1227,7 @@ FUNCTIONS = {
                 },
                 "limit": {
                     "type": "integer",
-                    "description": "Maximum number of results to return (default is 10)."
+                    "description": "Maximum number of results to return (default is 5)."
                 }
             },
             "required": []
@@ -1025,9 +1244,9 @@ FUNCTIONS = {
                     "type": "string",
                     "description": "Search text query or phrase to find contextually and semantically similar messages."
                 },
-                "tg_id": {
+                "chat_id": {
                     "type": "integer",
-                    "description": "Target Telegram user ID to filter messages. Omit or set to null to search across all user records."
+                    "description": "Optional. Telegram chat/user ID to restrict search to a specific conversation. Omit to search globally across all chats."
                 },
                 "limit": {
                     "type": "integer",
@@ -1039,31 +1258,62 @@ FUNCTIONS = {
     },
 
     "msg_range": {
-        "description": "Retrieve a sequential range of messages by database IDs or fetch the latest N messages for a specific user.",
+        "description": "Retrieves a slice of saved messages from DB by message ID range (start_id to end_id inclusive). Use this to read dialog context around specific message IDs.",
         "function": msg_range,
         "schema": {
             "type": "object",
             "properties": {
-                "tg_id": {
-                    "type": "integer",
-                    "description": "Telegram user ID whose chat history is being requested."
-                },
                 "start_id": {
                     "type": "integer",
-                    "description": "Starting message database ID (inclusive) for slicing the dialog window."
+                    "description": "Starting message database ID (inclusive)."
                 },
                 "end_id": {
                     "type": "integer",
-                    "description": "Ending message database ID (inclusive) for slicing the dialog window."
-                },
-                "limit": {
-                    "type": "integer",
-                    "description": "Fallback limit for the number of latest messages to fetch if start_id and end_id are omitted (default: 20)."
+                    "description": "Ending message database ID (inclusive)."
                 }
             },
-            "required": ["tg_id"]
+            "required": ["start_id", "end_id"]
         }
     },
+
+    "send_mess_peer": {
+        "description": "Sends a Telegram message to a specific user (peer_id) on behalf of the Owner. MUST be called ONLY after explicit confirmation from the Owner.",
+        "function": send_mess_peer,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "peer_id": {
+                    "type": "integer",
+                    "description": "Telegram user ID (peer_id) of the recipient."
+                },
+                "text_mess": {
+                    "type": "string",
+                    "description": "The exact final message text approved by the Owner. MUST be plain text only: strictly NO emojis or formatting."
+                }
+            },
+            "required": ["peer_id", "text_mess"]
+        }
+    },
+
+    "clear_inbox_notifs": {
+        "description": "Clears inbox notifications and widget. Call ONLY when explicitly requested by user. NEVER execute automatically.",
+        "function": clear_inbox_notifs,
+        "schema": {
+            "type": "object",
+            "properties": {},
+            "required": []
+        }
+    },
+
+    "get_pending_queue": {
+        "description": "Returns current pending/unread inbox messages queue. Call this if you need to re-check pending messages.",
+        "function": get_pending_queue,
+        "schema": {
+            "type": "object",
+            "properties": {},
+            "required": []
+        }
+    }
 
 }
 

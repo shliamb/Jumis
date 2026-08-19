@@ -11,16 +11,18 @@ logger = set_logger(name="ingest")
 
 
 class IngestionWorker:
-    def __init__(self, db_messages, db_users, queue_messages: asyncio.Queue, queue_response: asyncio.Queue):
+
+    def __init__(self, db_messages, db_users, queue_messages: asyncio.Queue, queue_new_mess: asyncio.Queue, telethon_client):
         self.db_messages = db_messages
         self.db_users = db_users
         self.embedder = embedder
         self.queue_messages = queue_messages
-        self.queue_response = queue_response
+        self.queue_new_mess = queue_new_mess
         self.admin_id = ADMIN_ID
+        self.telethon_client = telethon_client
+
         # Множество для хранения ссылок на активные фоновые задачи (защита от GC в Python 3.11+)
         self.background_tasks = set()
-
 
 
     async def run(self):
@@ -34,8 +36,6 @@ class IngestionWorker:
                 try:
                     # Запуск сохранения входящие/исходящие
                     await self._process_and_save(message_data)
-
-                    # Запуск передачи входящего
 
                 except Exception as e:
                     logger.error(f"[IngestionWorker] Ошибка сохранения: {e}", exc_info=True)
@@ -69,6 +69,7 @@ class IngestionWorker:
 
 
 
+
     async def _process_and_save(self, data: dict):
         """Внутренняя логика разбора и записи в БД."""
 
@@ -76,15 +77,18 @@ class IngestionWorker:
         user_info = data.get("user", {})
         
         chat_id = msg_info.get("chat_id")
-        tg_id = user_info.get("tg_id")
+        recipient_id = chat_id
+        sender_id = user_info.get("tg_id")
 
-        if not chat_id or not tg_id:
-            logger.warning(f"[Ingest] Пропущено сообщение: отсутствует chat_id ({chat_id}) или tg_id ({tg_id}).")
+        if not chat_id or not sender_id:
+            logger.warning(f"[Ingest] Пропущено сообщение: отсутствует chat_id ({chat_id}) или tg_id ({sender_id}).")
             return
 
         msg_type = msg_info.get("msg_type", "text")
         content = msg_info.get("content")
         audio_bytes = msg_info.get("audio_bytes")
+        direction = "outbound_owner" if sender_id == self.admin_id else "inbound_peer"
+        is_favourites = (sender_id == self.admin_id and chat_id == self.admin_id)
 
         # Расшифровка голосовых из RAM
         if msg_type == "voice" and audio_bytes:
@@ -96,29 +100,39 @@ class IngestionWorker:
                 logger.error(f"[STT] Ошибка расшифровки аудио для chat_id={chat_id}: {e}")
                 content = "[Ошибка расшифровки голосового]"
 
-        is_favourites = (tg_id == self.admin_id and chat_id == self.admin_id)
+        # VOICE + FAVORITES MESSAGES
+        if is_favourites:
+            if msg_type == "voice":
+                preview = f"{content[:30]}..." if content and len(content) > 30 else content
+                logger.info(f"[ResponseWorker] Голосовое из Избранного: {preview}")
+                # Отправляем расшифрованный текст обратно в Избранное
+                await self.telethon_client.send_message(message_text=content, telegram_id=chat_id, username=None)
+            return
 
-        # 1. ADD USER (Только для внешних пользователей)
+        # 1. ADD USER (входящие) Admin нажимает в первые /start
         username = user_info.get("username").lower() if user_info.get("username") else None
         first_name = user_info.get("first_name") or ""
         last_name = user_info.get("last_name") or ""
         full_name = f"{first_name} {last_name}".strip() or "Unnamed"
 
-        if tg_id != self.admin_id:
+        if sender_id != self.admin_id:
             new_user_data = {
-                "tg_id": tg_id,
+                "tg_id": sender_id,
                 "username": username, # @
                 "full_name": full_name,
                 "phone": user_info.get("phone"),
                 "lang_code": user_info.get("lang_code")
             }
+            # Если пользователя нет - сохранит, если есть - ничего
             await self.db_users.add_user(new_user_data)
 
-        # 2. ADD MESSAGE
+        # 2. ADD MESSAGE (входящие + исходящие)
         data_message = {
-            "tg_id": tg_id,
+            "chat_id": chat_id,
+            "sender_id": sender_id,
+            "recipient_id": chat_id,
             "tg_msg_id": msg_info.get("tg_msg_id"),
-            "role": msg_info.get("role", "user"),
+            "direction": direction,
             "content": content,
             "msg_type": msg_type,
             "media_file_id": msg_info.get("media_file_id"),
@@ -127,46 +141,48 @@ class IngestionWorker:
         }
 
         msg_db_id = None
-        if not is_favourites:
-            msg_db_id = await self.db_messages.add_message(data_message)
-            if not msg_db_id:
-                logger.error(f"[Ingest] Не удалось сохранить сообщение для chat_id={chat_id}")
-                return
+        msg_db_id = await self.db_messages.add_message(data_message)
+        if not msg_db_id:
+            logger.error(f"[Ingest] Не удалось сохранить сообщение для chat_id={chat_id}")
+            return
 
-        # Фоновая векторизация
-        if content and not content.startswith("[") and not is_favourites and msg_db_id:
+        # 3. VECTORIZATION 
+        if content and not content.startswith("[") and msg_db_id:
             task = asyncio.create_task(self._background_vectorize(message_id=msg_db_id, content=content))
             self.background_tasks.add(task)
             task.add_done_callback(self.background_tasks.discard)
 
 
-        # Проверка черного/белого списков (пропускается для Избранного)
-        if not is_favourites:
-            user_data = await self.db_users.db_get_user(tg_id=tg_id)
-            if not user_data:
-                logger.warning(f"[Ingest] Пользователь tg_id={tg_id} не найден в БД при проверке списков.")
-                return
-
-            if user_data.get("is_blocked") or user_data.get("is_whitelisted"):
-                logger.info(f"[Ingest] Сообщение от tg_id={tg_id} проигнорировано (Blacklist/Whitelist).")
-                return
+        # 4. CHECKING WHITE/BLACK LIST (пропускается для Избранного)
+        ##### ПОЗЖЕ ПРИДУМАЮ ЛОГИКУ #####
+        # user_data = await self.db_users.db_get_user(tg_id=sender_id)
+        # if not user_data:
+        #     logger.warning(f"[Ingest] Пользователь tg_id={sender_id} не найден в БД при проверке списков.")
+        #     return
+        # if user_data.get("is_blocked") or user_data.get("is_whitelisted"):
+        #     logger.info(f"[Ingest] Сообщение от tg_id={sender_id} проигнорировано (Blacklist/Whitelist).")
+        #     return
         
-        # 3. ADD QUEUE RESPONSE
-        if is_favourites or tg_id != self.admin_id:
-            task_payload = {
-                "tg_id": tg_id,
-                "chat_id": chat_id,
-                "msg_db_id": msg_db_id,
-                "is_favourites": is_favourites,
-                "tg_msg_id": msg_info.get("tg_msg_id"),
-                "username": username,
-                "content": content,
-                "msg_type": msg_type,
-                "created_at": msg_info.get("created_at")
-            }
-            await self.queue_response.put(task_payload)
-            log_tag = "Избранное" if is_favourites else f"#{msg_db_id}"
-            logger.info(f"[IngestWorker] Сообщение [{log_tag}] передано в response_queue")
+
+        # 5. ADD QUEUE RESPONSE (входящие + исходящие + избранное)
+        task_payload = {
+            "chat_id": chat_id,
+            "sender_id": sender_id,
+            "recipient_id": recipient_id,
+
+            "tg_msg_id": msg_info.get("tg_msg_id"),
+            "msg_db_id": msg_db_id,
+
+            "username": username,
+            "content": content,
+            "direction": direction,
+            "msg_type": msg_type,
+            "created_at": msg_info.get("created_at")
+        }
+
+        # В очередь передаем, далее вылавливаем в jumis/jumis_agent/jumis_agent.py
+        await self.queue_new_mess.put(task_payload)
+        logger.info(f"[IngestWorker] Сообщение [{msg_db_id}] передано в queue_new_mess")
 
         logger.info(f"💾 [Ingest] Сообщение id={msg_db_id} (chat_id={chat_id}, type={msg_type}) успешно обработано.")
 

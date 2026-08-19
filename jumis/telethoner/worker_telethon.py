@@ -119,7 +119,7 @@ class myTelethon:
             self.client = TelegramClient('session_jumis', API_ID, API_HASH)
 
 
-        @self.client.on(events.NewMessage())  # Убрали incoming=True, чтобы ловли и out
+        @self.client.on(events.NewMessage())
         async def handler(event):
 
             # 1. Группы, супергруппы и каналы отсекаются сразу (даже если пишешь ты)
@@ -145,16 +145,7 @@ class myTelethon:
                 if getattr(sender, "scam", False) or getattr(sender, "fake", False):
                     return
 
-            # 5. Роль для истории диалога (LLM-формат)
-            # user = Входящее от клиента
-            # assistant = Исходящее от тебя (ручное или от нейросети)
-            role = "assistant" if event.out else "user"
-            
-            # Дополнительная метка для аналитики (кто физически написал)
-            author_type = "human_owner" if event.out else "client"
-
-
-            # 6. Полный пакет данных об отправителе (Interlocutor / Sender)
+            # 5. Полный пакет данных об отправителе (Interlocutor / Sender)
             user_payload = {
                 "tg_id": sender.id,
                 "username": sender.username.lower() if sender.username else None,
@@ -176,34 +167,22 @@ class myTelethon:
                 "is_mutual_contact": getattr(sender, "mutual_contact", False),
             }
 
-            # 7. Детализация медиа (если есть)
+            # 6. Детализация медиа (если есть)
             media_info = await self.detect_media_info(event)
 
-            # 8. Полный пакет данных сообщения
+            # 7. Полный пакет данных сообщения
             message_payload = {
                 "tg_msg_id": event.id,
                 "chat_id": event.chat_id,  # Уникальный ID чата/собеседника
-                "role": role,
                 "is_outgoing": event.out,
                 "content": event.raw_text or "",
                 "created_at": event.date,  # datetime с tz=UTC (подходит под TIMESTAMPTZ)
                 **media_info,  # Подмешивает msg_type, media_file_id, media_name
             }
 
-            # Лог для отладки направления
-            # direction_icon = "📤 [ВЫ ОТВЕТИЛИ]" if event.out else "📥 [ВХОДЯЩЕЕ]"
-            # print(
-            #     f"{direction_icon} Чаты ID: {event.chat_id} | Юзер: {user_payload['full_name']} (@{user_payload['username']})\n"
-            #     f"  Тип: {message_payload['msg_type']} | Роль: {role} | Текст: {message_payload['content'][:50]}"
-            # )
-
-            # msg_type = media_info.get("msg_type")
-
-            # out_message = f"Сообщение: {event.raw_text[:40]}" if msg_type == "text" else f"Сообщение: {msg_type}"
-
-            # print(f"💬 Чат {chat.id} | Роль: {role} ({author_type}) | user_id: {sender.id} | {out_message}")
-
-            # 9. Собираем итоговую задачу в очередь self.queue_messages
+            # 8. Собираем итоговую задачу в очередь self.queue_messages
+            # Тут минимально очищенные входящие + мои исходящие уходят в очередь и вылав-
+            # ливаются в jumis/ingest/worker.py
             task_payload = {"user": user_payload, "message": message_payload}
             await self.queue_messages.put(task_payload)
 
@@ -305,7 +284,7 @@ class myTelethon:
         return chunks
 
 
-    async def send_message(self, message_text: str, telegram_id: int = None, username: str = None):
+    async def send_message(self, message_text: str, telegram_id: int = None, username: str = None) -> int | str:
         """Отправить сообщение клиенту от моего личного имени через Telethon."""
 
         if not message_text:
@@ -340,243 +319,3 @@ class myTelethon:
             print(error_msg)
             return f"❌ Ошибка отправки на {target_log}.\nВозможно, у вас нет открытого диалога с пользователем или он вас заблокировал."
 
-
-
-    # async def send_message(self, message_text: str, telegram_id: int = None, username: str = None):
-    #         """Отправить сообщение клиенту от моего личного имени через Telethon"""
-
-    #         if not message_text:
-    #             return "Ошибка: текст сообщения пуст / Error: message text is empty"
-
-    #         # Проверяем, инициализирован ли клиент и подключен ли он к серверам
-    #         if not self.client or not self.client.is_connected():
-    #             print("❌ Telethon client not connected.")
-    #             return "❌ Ошибка: сессия Telethon не подключена. / Telethon client not connected."
-
-    #         # Определяем приоритетную цель для отправки
-    #         target = None
-    #         clean_username = None
-
-    #         if telegram_id:
-    #             target = telegram_id
-    #         elif username:
-    #             clean_username = username.strip().replace("@", "")
-    #             target = clean_username
-
-    #         if not target:
-    #             return "Ошибка: не указан ни ID, ни Юзернейм / Error: no ID or Username provided"
-
-    #         try:
-    #             # Telethon одинаково хорошо принимает в send_message как int(ID), так и str(username)
-    #             await self.client.send_message(target, message_text)
-                
-    #             target_log = f"id: {telegram_id}" if telegram_id else f"@{clean_username}"
-    #             #print(f"Сообщение успешно отправлено на {target_log}")
-                
-    #             # Если отправляли по юзернейму, то попутно вытягиваем его железный ID для базы данных
-    #             if clean_username:
-    #                 entity = await self.client.get_entity(clean_username)
-    #                 return entity.id # Возвращаем числовой ID
-                
-    #             # Если изначально отправляли по ID, возвращаем его же
-    #             return telegram_id
-                
-    #         except Exception as e:
-    #             target_log = f"id: {telegram_id}" if telegram_id else f"@{clean_username}"
-    #             error_msg = f"Не удалось отправить сообщение на {target_log}: {e}"
-    #             print(error_msg)
-                
-    #             # Возвращаем понятную мастеру ошибку
-    #             return f"❌ Ошибка отправки на {target_log}.\nВозможно, у вас нет открытого диалога с пользователем или он вас заблокировал."
-
-
-
-    async def stop(self):
-            """Мягко отключает Telethon клиент от Telegram."""
-            if self.client and self.client.is_connected():
-                await self.client.disconnect()
-                print("[Telethon] Соединение с Telegram успешно закрыто.")
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-# # import asyncio
-# import aiohttp
-# from telethon import TelegramClient, events, connection
-# import socks
-# from config import GROUP_ID, API_ID, API_HASH, USE_PROXY
-# from proxy.mtprotoproxy import MTPROXY_STRINGS
-# from queue_task import workers_mess_queues
-# from logs.set_logger import set_logger
-# logger = set_logger(name="telethon")
-
-
-
-
-
-
-
-
-
-
-
-
-
-# class myTelethon():
-#     def __init__(self):
-#         self.use_proxy = USE_PROXY
-#         self.client = None
-#         self.proxy_strings = MTPROXY_STRINGS
-
-#         self._conect_poxy()
-#         @self.client.on(events.NewMessage(chats=GROUP_ID))
-#         async def handler(event):
-#             """ Вылавливает сооббщения в группе и кладет в очередь """
-#             sender = await event.get_sender()
-#             # print('---')
-#             # print('sender_id:', event.sender_id)
-#             # print('is_bot:', getattr(sender, 'bot', False))
-#             # print('text:', event.raw_text)
-
-#             message_task = {'id': event.sender_id, 'is_bot': getattr(sender, 'bot', False), 'bot_message': event.raw_text}
-#             await workers_mess_queues.put(message_task)
-#             print(f"Sent a new message from the group to the queue: [{event.sender_id}]: {event.raw_text[:8]}..")
-
-
-#     def _get_best_proxy(self):
-#         """ """
-#         return best_proxy
-
-
-
-#     def _conect_poxy(self):
-#         """"""
-#         if self.use_proxy and self.proxy_strings:
-#             proxy_str = self.proxy_strings[2]
-#             parts = proxy_str.replace('mtproxy://', '').split(':')
-#             host = parts[0]
-#             port = int(parts[1])
-#             secret_bytes = parts[2]
-#             print(f"MTProxy: {host}:{port}, secret={secret_bytes[:8]}..")
-#             self.client = TelegramClient(
-#                 'session_name',
-#                 API_ID,
-#                 API_HASH,
-#                 proxy=(host, port, secret_bytes),
-#                 connection=connection.ConnectionTcpMTProxyRandomizedIntermediate
-#             )
-#         else:
-#             # В идеальном мире, где ничего не блокируют!
-#             self.client = TelegramClient('session_name', API_ID, API_HASH)
-
-
-#     async def reconnect(self):
-#         """"""
-#         if self.bot:
-#             await self.bot.session.close()  # закрыть сессию
-#         await self.create_bot()  # пересоздаст с новым прокси
-
-
-#     async def run(self):
-#         """Проверка ip в самом Telethone, работает ли proxy"""
-#         await self.client.start()
-#         print("Telethon is running, I'm listening to messages...")
-#         logger.info("Telethon is running, I'm listening to messages...")
-#         await self.client.run_until_disconnected()
-
-
-#     async def send_to_group(self, text_message: str):
-#         """Отправить сообщение в группу от моего лица"""
-#         await self.client.send_message(GROUP_ID, text_message)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-# Telethon — это официально допустимая технология Telegram API (MTProto), но:
-# - если автоматизировать обычный пользовательский аккаунт, это уже зона риска;
-# - не “незаконно”, но Telegram может ограничить/забанить аккаунт, если увидит подозрительную автоматизацию.
-
-# ### Разница:
-# - aiogram → Bot API → обычные боты
-# - Telethon → MTProto → почти как обычный Telegram-клиент
-
-
-# ### При первом запуске спросит:
-# - номер телефона
-# - код из Telegram
-# - если есть — пароль 2FA
-
-# После этого создаст файл сессии, и дальше логиниться заново обычно не надо.
-
-# ---
-
-# ## Да, его надо держать запущенным
-# Да:
-# - запустил процесс,
-# - он висит,
-# - ловит новые сообщения в группе,
-# - нужные сообщения потом сам пихнешь в очередь.
-
-# ---
-
-# ## Важный момент
-# Аккаунт, через который запускается Telethon, должен:
-# - быть в этой группе
-# - иметь доступ к сообщениям группы
-
-# ---
-
-# ## По рискам
-# Что реально может быть проблемой:
-# - спам
-# - много аккаунтов
-# - массовая автоматизация
-# - подозрительная активность с новых IP
-# - фарм / абуз / инвайты / рассылки
-
-# Твой кейс “читать группу и реагировать” сам по себе не выглядит чем-то экстремальным.

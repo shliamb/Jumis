@@ -1,4 +1,5 @@
 # database/users.py
+from typing import Any, Dict, List, Optional
 from logs.set_logger import set_logger
 logger = set_logger(name="db")
 from database import db
@@ -136,6 +137,38 @@ class DBUsers():
             return False
 
 
+
+    async def search_users_by_alias(
+            self,
+            embedding: list,
+            limit: int = 5,
+            min_similarity: float = 0.75
+        ) -> List[Dict[str, Any]]:
+            """
+            Векторный поиск пользователей по полю aliases_vector (косинусное сходство).
+            """
+            emb_str = str(embedding)
+            
+            query = """
+                SELECT id, tg_id, username, full_name, phone, category, comment, summary, 
+                    aliases, is_admin, is_blocked, is_whitelisted, lang_code,
+                    (1 - (aliases_vector <=> $1::vector)) AS similarity
+                FROM users
+                WHERE aliases_vector IS NOT NULL
+                AND (1 - (aliases_vector <=> $1::vector)) >= $2
+                ORDER BY aliases_vector <=> $1::vector ASC
+                LIMIT $3;
+            """
+
+            try:
+                records = await self.db.fetch(query, emb_str, min_similarity, limit)
+                return [dict(rec) for rec in records] if records else []
+            except Exception as e:
+                logger.error(f"[DBUsers] Ошибка векторного поиска по aliases_vector: {e}")
+                return []
+
+
+
     async def db_get_user(
         self,
         user_id: int | str | None = None, 
@@ -176,6 +209,54 @@ class DBUsers():
         except Exception as e:
             logger.error("db_get_user database error: %s", e)
             return {}
+
+
+    # async def db_get_user(
+    #         self,
+    #         user_id: int | str | None = None, 
+    #         tg_id: int | str | None = None, 
+    #         username: str | None = None
+    #     ) -> dict:
+    #         """Единый поиск пользователя в базе по id, tg_id или username (без вектора)."""
+    #         # Явно перечисляем поля, чтобы asyncpg не спотыкался об aliases_vector
+    #         fields = """
+    #             id, tg_id, username, full_name, phone, category, 
+    #             comment, summary, aliases, is_admin, is_blocked, 
+    #             is_whitelisted, is_bot, lang_code, model_default, 
+    #             model_cheap, model_smart, created_at, updated_at
+    #         """
+            
+    #         query = None
+    #         param = None
+
+    #         try:
+    #             if user_id is not None and str(user_id).strip():
+    #                 query = f"SELECT {fields} FROM users WHERE id = $1"
+    #                 param = int(user_id)
+
+    #             elif tg_id is not None and str(tg_id).strip():
+    #                 query = f"SELECT {fields} FROM users WHERE tg_id = $1"
+    #                 param = int(tg_id)
+
+    #             elif username and str(username).strip():
+    #                 query = f"SELECT {fields} FROM users WHERE LOWER(username) = LOWER($1)"
+    #                 param = str(username).strip().lstrip("@")
+
+    #             if not query:
+    #                 logger.warning("db_get_user called with no valid parameters.")
+    #                 return {}
+
+    #             record = await self.db.fetchrow(query, param)
+    #             return dict(record) if record else {}
+
+    #         except ValueError as e:
+    #             logger.error("db_get_user type conversion error: %s", e)
+    #             return {}
+    #         except Exception as e:
+    #             # Выводим реальную ошибку в лог, чтобы не гадать
+    #             logger.error("db_get_user database error: %s", e, exc_info=True)
+    #             return {}
+
 
 
     async def get_all_users(self) -> list[dict]:

@@ -26,7 +26,19 @@ AGENTS = {
 
             "[TOOL EXECUTION RULES]\n"
             "- `write_fact`: Auto-run silently for long-term info/requests. Never claim saved without actual tool call.\n"
-            "- `msg_search` / `msg_range`: Run ONLY on explicit Admin request. Never call autonomously.\n\n"
+            "- `msg_search` / `msg_range`: Run ONLY on explicit Admin request. Never call autonomously.\n"
+            "- `send_mess_peer`: Send message ONLY after Owner's explicit confirmation. Draft MUST be plain raw text: strictly NO emojis.\n\n"
+            #"- `send_mess_peer`: Send message ONLY after Owner's explicit confirmation. Draft MUST be written in natural human style: plain text or simple Telegram Markdown (bold/italic only). Strictly NO emojis, NO headers (#)."
+
+            # "[Subagent Reports]\n"
+            # "- Messages matching `[Incoming Message | Analysis by <name>]` are internal background reports for the Owner.\n"
+            # "- Action: Summarize the message for the Owner and suggest a response draft.\n"
+            # "- Approval: NEVER send messages to the peer without explicit Owner confirmation. Revise and re-confirm if edits are requested.\n"
+
+            # [Субагенты]
+            # - Сообщение вида `[Incoming Message | Analysis by <имя>]` — это отчёт субагента о входящем сообщении Владельцу.
+            # - Реакция: передай суть Владельцу и предложи вариант ответа.
+            # - Согласование: НИКОГДА не отправляй ответ собеседнику без прямого одобрения Владельца. При правках обновляй черновик и снова запрашивай подтверждение.
 
         ),
         "tools": [
@@ -39,7 +51,7 @@ AGENTS = {
 
             # FACTS
             "write_fact",
-            "update_fact",
+            #"update_fact",
             "del_fact",
             "search_facts",
             # "facts_by_cat",
@@ -50,59 +62,93 @@ AGENTS = {
             # "get_categories_users",
 
             # USERS
-            "get_users",
-            "get_user",
+            # "get_users", Хитрит и получает сразу всех - не экономно сука..
+            # "get_user", Нахер не нужно, все есть в search_users даже по вектору..
             "update_user",
             "search_users",
 
             # Messages
             "msg_search",
-            "msg_range"
+            "msg_range",
+
+            # SENDING MESSAGES
+            "send_mess_peer",
+            "clear_inbox_notifs",
+            # "get_pending_queue" - на всякий случай функция есть, но она не нужна
         ]
     },
 
-    "tg_inbound_agent": {
-        "system": (
+    # "tg_inbound_agent": {
+    #     "system": (
 
-        "[Задача]\n"
-        "- Тебе приходит входящее сообщение из Telegram. Твоя цель — проанализировать его и подготовить черновик ответа для Главного Агента (Юмис).\n"
-        "- Определи категорию написавшего пользователя, подтяни стиль общения Владельца и найди контекст из прошлых переписок или похожих вопросов.\n"
-        "- Ответ готовится НЕ для отправки клиенту, а как аналитический черновик для Юмис.\n\n"
+    #         "[Task]\n"
+    #         "Gather context for incoming messages and pass structured facts to Jumis.\n"
+    #         "\n"
+    #         "[Fast Path]\n"
+    #         "- If the message is a simple greeting or fluff (\"Hi\", \"Hello\"): SKIP deep searches. Check profile and output immediately.\n"
+    #         "\n"
+    #         "[Tools]\n"
+    #         "- `search_users`: Profile (check comment — personal note, and summary — dialog brief).\n"
+    #         "- `msg_search`: Message history (limit equals incoming batch size).\n"
+    #         "- `search_facts`: Rules and facts (ONLY for specific questions).\n"
+    #         "- `update_user`: Save comment / summary (if empty and new facts exist).\n"
+    #         "- `update_fact`: Save new rules and agreements.\n"
+    #         "\n"
+    #         "[Rules]\n"
+    #         "- Keep comment / summary to concise facts (identity, status, topic). Raw log dumps strictly prohibited.\n"
+    #         "\n"
+    #         "[Output Format]\n"
+    #         "• Sender: [Name / ID] writing to Owner\n"
+    #         "• Summary: [Core meaning]\n"
+    #         "• DB Context: [Comment, Summary, history/facts]\n"
+    #         "• Gaps: [Requires Owner's decision]\n"
 
-        "[Инструменты]\n"
-        "- search_users - найти профиль клиента, его статус и привязанные заметки\n"
-        "- search_facts - найти правила работы, инструкции и стиль общения Владельца, факты о написавшем пользователе, если есть\n"
-        "- msg_search - найти историю сообщений с пользователем или похожие вопросы/ответы\n"
-        "- update_fact, update_user - ты так же можешь дописать полезную в будущем информацию о пользователе, для последующих ответов.\n\т"
 
-        "[Правила]\n"
-        "- Сначала собери контекст через инструменты, только затем формируй итоговый ответ.\n"
-        "- Пиши в стиле Владельца: кратко, по делу, без лишней вежливости и воды.\n"
-        "- Если в базе нет точных данных (цен, сроков) — явно укажи: '⚠️ Требуется уточнение Владельца'. Ничего не выдумывай.\n\n"
+    #         # [Задача]
+    #         # Собрать контекст по входящему сообщению и передать фактуру Юмис.
 
-        ),
-        "tools": [
-            # DATE
-            "get_date",
+    #         # [Быстрый проход]
+    #         # - Если сообщение — просто приветствие или флуд ("Привет", "Ау"): НЕ вызывай поиск по фактам и истории. Проверь профиль и сразу выдавай результат.
 
-            # FACTS
-            "write_fact",
-            "update_fact",
-            "search_facts",
+    #         # [Инструменты]
+    #         # - `search_users`: Профиль (проверяй comment — заметку и summary — выжимку).
+    #         # - `msg_search`: История переписки (лимит равен пачке входящих).
+    #         # - `search_facts`: Правила и факты (ТОЛЬКО при конкретном вопросе).
+    #         # - `update_user`: Обновление comment / summary (если пусты и есть новые факты).
+    #         # - `update_fact`: Запись новых правил и договоренностей.
 
-            # CATEGORIES USERS
-            "add_category_users",
+    #         # [Правила]
+    #         # - В comment / summary пиши только краткие факты (кто это, статус, тема). Копировать сырой текст запрещено.
 
-            # USERS
-            "get_user",
-            "update_user",
-            "search_users",
+    #         # [Формат вывода]
+    #         # • Собеседник: [Имя / ID] пишет Владельцу
+    #         # • Суть сообщения: [Краткая суть]
+    #         # • Контекст БД: [Comment, Summary, история/факты]
+    #         # • Пробелы: [Что требует решения Владельца]
 
-            # Messages
-            "msg_search",
-            "msg_range"
-        ]
-    }
+    #     ),
+    #     "tools": [
+    #         # DATE
+    #         "get_date",
+
+    #         # FACTS
+    #         "write_fact",
+    #         "update_fact",
+    #         "search_facts",
+
+    #         # CATEGORIES USERS
+    #         "add_category_users",
+
+    #         # USERS
+    #         "get_user",
+    #         "update_user",
+    #         "search_users",
+
+    #         # Messages
+    #         "msg_search",
+    #         "msg_range"
+    #     ]
+    # }
 
 }
 

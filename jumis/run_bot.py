@@ -13,7 +13,7 @@ from llm.llm_router import LLMWorker
 from database.memories import DBMemories
 from database.users import DBUsers
 from database.messages import DBMessages
-from response.worker import ResponseWorker
+# from response.worker import ResponseWorker
 from jumis_agent.jumis_agent import JumisAgent
 
 
@@ -70,6 +70,8 @@ async def main_bot() -> None:
     await db.connect()
     print("Успешное подключение к PostgreSQL.")
 
+    db_messages = DBMessages()
+
     # Инициализация памяти (загружает категории в кэш self)
     db_memory = DBMemories()
     try:
@@ -90,19 +92,21 @@ async def main_bot() -> None:
 
     # Инициализация очереди и сообщений
     queue_messages = asyncio.Queue()
-    db_messages = DBMessages()
 
-    # Инициализация очереди сообщений требующих ответов
-    queue_response = asyncio.Queue()
+    # Инициализация очереди новых сообщений от peers для Агента Jumis
+    queue_new_mess = asyncio.Queue()
 
-    # Инициализация очереди внутренних сообщений для Jumis Agent
-    queue_req_jum = asyncio.Queue()
+    # Инициализация Telethon
+    mytelethon = myTelethon(
+        queue_messages
+    )
 
     # Инициализация LLM Воркера и передача в aiogram workflow_data
     llm = LLMWorker(
         db_memory=db_memory, 
         db_users=db_users, 
-        db_messages=db_messages
+        db_messages=db_messages,
+        mytelethon=mytelethon
     )
     dp["llm"] = llm  # Доступен во всех хэндлерах через `llm` или контекст
 
@@ -124,29 +128,23 @@ async def main_bot() -> None:
         print("Не удалось создать экземпляр бота! Завершение работы.")
         return
 
-    # Инициализация Telethon и входящего обработчика
-    mytelethon = myTelethon(
-        queue_messages
-    )
+    # Инициализация
     ingestion_worker = IngestionWorker(
         db_messages=db_messages,
         db_users=db_users,
         queue_messages=queue_messages,
-        queue_response=queue_response
+        queue_new_mess=queue_new_mess,
+        telethon_client=mytelethon
     )
-    response_worker = ResponseWorker(
-        bot=dp.bot,
-        queue_response=queue_response, 
-        telethon_client=mytelethon,
-        queue_req_jum=queue_req_jum,
-        llm=llm
-    )
+
     jumis_agent = JumisAgent(
         bot=dp.bot,
         llm=llm,
-        queue_req_jum=queue_req_jum
+        queue_new_mess=queue_new_mess
     )
     dp["jumis_agent"] = jumis_agent
+    # Привязываем экземпляр агента к llm (чтобы call_function мог его подставлять)
+    llm.jumis_agent = jumis_agent
 
     print("Все сервисы запускаются...")
 
@@ -163,7 +161,6 @@ async def main_bot() -> None:
                     dp.start_polling(dp.bot, skip_updates=False),
                     mytelethon.run(),
                     ingestion_worker.run(),
-                    response_worker.run(),
                     jumis_agent.run_queue_worker()
                 )
 

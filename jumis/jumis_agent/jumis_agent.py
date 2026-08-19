@@ -1,3 +1,4 @@
+# jumis/jumis_agent/jumis_agent.py
 import asyncio
 import time
 import json
@@ -18,6 +19,7 @@ logger = set_logger(name="jumis_agent")
 
 
 class TelegramHTMLCleaner(HTMLParser):
+    """"""
     ALLOWED_TAGS = {
         'b', 'strong', 'i', 'em', 'u', 'ins', 's', 'strike', 'del', 
         'tg-spoiler', 'a', 'code', 'pre', 'blockquote', 'ph',
@@ -102,57 +104,36 @@ class TelegramHTMLCleaner(HTMLParser):
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+###############################
+######### JUMIS AGENT #########
+###############################
+
 class JumisAgent:
-    def __init__(self, bot, llm, queue_req_jum: asyncio.Queue):
+
+    def __init__(self, bot, llm, queue_new_mess: asyncio.Queue):
         self.llm = llm
         self.bot = bot
         self.stt = stt
-        self.queue_req_jum = queue_req_jum
+        self.queue_new_mess = queue_new_mess
         self.admin_id = ADMIN_ID
         self.use_rich_message = USE_RICH_MESSAGES
 
-
-
-    # async def process_user_message(self, user_text: str, stream_handler=None):
-    #     """Прямой диалог с владельцем из хэндлера."""
-    #     system_prompt, tools = await self.llm.get_tools("jumis_agent")
-        
-    #     # Здесь твоя работающая логика стриминга и вызова LLM для Юмис
-    #     response = await self.llm.call_with_tools(
-    #         system=system_prompt,
-    #         question=user_text,
-    #         tools=tools
-    #     )
-    #     return response
-
-
-
-    async def run_queue_worker(self):
-        """Слушатель внутренней очереди задач."""
-        logger.info("[JumisAgent] Запущен фоновый слушатель очереди")
-        while True:
-            try:
-                task_data = await self.queue_req_jum.get()
-                
-                client_tg_id = task_data.get("tg_id")
-                draft_text = task_data.get("draft_text")
-
-                print(f"\nСообщение из очереди для Jumis: {task_data}\n")
-                # Передача Jumis
-
-
-                self.queue_req_jum.task_done()
-
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                logger.error(f"💥 [JumisAgent Queue Error]: {e}")
-                await asyncio.sleep(1)
-
-
-
-
-
+        # Словарь вида: {sender_id: {"username": str, "count": int, "last_text": str}}
+        self.pending_peers = {}
+        # ID сообщения-уведомления, которое мы будем редактировать в чате с Владельцем
+        self.notif_msg_id = None
 
 
     @staticmethod
@@ -454,257 +435,479 @@ class JumisAgent:
             )
 
 
+    # async def chec_notif_mess(self):
+    #     """
+    #     Формирует итоговый массив сообщений для LLM,
+    #     внедряя фейковый вызов функции get_pending_queue, если есть неотвеченные.
+    #     """
+    #     messages = list(history)  # Копия существующей истории
 
+    #     if self.pending_peers:
+    #         # 1. Формируем структуру незакрытых чатов
+    #         unread_info = []
+    #         for peer_id, data in self.pending_peers.items():
+    #             u_name = f"@{data['username']}" if data.get('username') and data['username'] != "Без юзернейма" else "без username"
+    #             unread_info.append({
+    #                 "peer_id": peer_id,
+    #                 "username": u_name,
+    #                 "unread_count": data.get("count", 1),
+    #                 "last_text": data.get("last_text", "")
+    #             })
+
+    #         # 2. Имитация вызова функции моделью
+    #         mock_call_id = "call_auto_pending_check"
+    #         messages.append({
+    #             "role": "assistant",
+    #             "content": None,
+    #             "tool_calls": [{
+    #                 "id": mock_call_id,
+    #                 "type": "function",
+    #                 "function": {
+    #                     "name": "get_pending_queue",
+    #                     "arguments": "{}"
+    #                 }
+    #             }]
+    #         })
+
+    #         # 3. Ответ функции с флагом побуждения к напоминанию
+    #         messages.append({
+    #             "role": "tool",
+    #             "tool_call_id": mock_call_id,
+    #             "content": json.dumps({
+    #                 "status": "success",
+    #                 "unread_peers_count": len(self.pending_peers),
+    #                 "unread_queue": unread_info,
+    #                 "system_instruction": "Внимание! Есть неотвеченные диалоги. Кратко напомни Владельцу о них, если это уместно в контексте ответа."
+    #             }, ensure_ascii=False)
+    #         })
+
+
+
+    async def check_notif_mess(self):
+            """
+            Проверяет очередь pending_peers и инжектит контекст неотвеченных сообщений 
+            напрямую в self.llm.dialog через его стандартные методы.
+            """
+            if not self.pending_peers:
+                return
+
+            # 1. Собираем компактный список неотвеченных
+            unread_info = []
+            for peer_id, data in self.pending_peers.items():
+                u_name = f"@{data['username']}" if data.get("username") and data["username"] != "Без юзернейма" else "без username"
+                unread_info.append({
+                    "peer_id": peer_id,
+                    "username": u_name,
+                    "unread_count": data.get("count", 1),
+                    "last_text": data.get("last_text", "")
+                })
+
+            # 2. Уникальный ID для mock-вызова (чтобы API не ругался на дубли каллов)
+            mock_call_id = f"call_auto_pending_{int(time.time())}"
+
+            tool_calls_payload = [{
+                "id": mock_call_id,
+                "type": "function",
+                "function": {
+                    "name": "get_pending_queue",
+                    "arguments": "{}"
+                }
+            }]
+
+            tool_response_payload = json.dumps({
+                "status": "success",
+                "context_type": "OWNER_INBOX_NOTIFICATIONS",
+                "unread_peers_count": len(self.pending_peers),
+                "unread_queue": unread_info,
+                "system_instruction": (
+                    f"Talking ONLY to Owner (tg_id: {self.admin_id}). 'unread_queue' contains 3rd-party messages. "
+                    "Briefly notify Owner if relevant. Do NOT run search tools or 'clear_inbox_notifs' without direct command."
+                )
+            }, ensure_ascii=False)
+
+            # 3. Записываем в историю llm через твои родные методы
+            await self.llm.add_assistant_message(content=None, tool_calls=tool_calls_payload)
+            await self.llm.add_tool_response(tool_call_id=mock_call_id, content=tool_response_payload)
+
+
+
+    async def process_agent_request(self, chat_id: int, prompt_text: str):
+            """ УНИВЕРСАЛЬНОЕ ядро запуска Агента Jumis (из хэндлера или очереди) """
+            msg = None
+            try:
+                system, tools = await self.llm.get_tools("jumis_agent")
+                
+                # Отправляем начальную плашку в чат
+                msg = await self.bot.send_message(chat_id, "...")
+
+                # 1. Проверяем и инжектим уведомление о неотвеченных (если они есть)
+                await self.check_notif_mess()
+
+                # 2. Теперь добавляем сам запрос пользователя
+                await self.llm.add_user_message(prompt_text)
+
+                full_text = ""          
+                buffer = ""
+                last_update_time = 0    
+
+                while True:
+                    tool_calls_info = []      
+                    has_tool_calls = False
+                    stream_text = ""
+
+                    # 1. СТРИМИНГ ОТВЕТА ОТ LLM
+                    async for chunk in self.llm.refine_stream_tools(question=None, system=system, tools=tools):
+                        if chunk['type'] == 'text':
+                            stream_text += chunk['content']
+                            buffer += chunk['content']
+                            
+                            current_time = time.time()
+                            current_text = full_text + stream_text
+                            if len(buffer.strip()) > 5 and (current_time - last_update_time) >= 1.5:
+
+                                if len(current_text) > 4000:
+                                    buffer = ""
+                                    continue
+
+                                try:
+                                    await self.bot.edit_message_text(
+                                        chat_id=chat_id,
+                                        message_id=msg.message_id,
+                                        text=current_text,
+                                        parse_mode=None
+                                    )
+                                    last_update_time = current_time
+                                    buffer = ""
+                                except TelegramRetryAfter as e:
+                                    logger.warning(f"Словили флуд внутри стрима. Спим {e.retry_after} сек.")
+                                    await asyncio.sleep(e.retry_after)
+                                    last_update_time = time.time()
+                                except TelegramBadRequest as e:
+                                    if "can't parse entities" not in str(e):
+                                        logger.error(f"Ошибка ТГ при стриминге: {e}")
+                                except TelegramAPIError as e:
+                                    logger.error(f"Общая ошибка ТГ при стриминге: {e}")
+
+                        elif chunk['type'] == 'tool':
+                            for tool_id, tool in chunk['data'].items():
+                                tool_calls_info.append({
+                                    'id': tool_id,
+                                    'name': tool['name'],
+                                    'arguments': tool['arguments']
+                                })
+                                has_tool_calls = True
+
+                    # 2. ВЫЗОВ ФУНКЦИЙ (ТУЛЗОВ)
+                    if has_tool_calls:
+                        tool_calls_for_msg = []
+                        for tc in tool_calls_info:
+                            tool_calls_for_msg.append({
+                                "id": tc['id'],
+                                "type": "function",
+                                "function": {
+                                    "name": tc['name'],
+                                    "arguments": tc['arguments']
+                                }
+                            })
+                        await self.llm.add_assistant_message(content=stream_text, tool_calls=tool_calls_for_msg)
+                        full_text += stream_text + "\n"
+                        
+                        try:
+                            await self.bot.edit_message_text(
+                                chat_id=chat_id,
+                                message_id=msg.message_id,
+                                text=full_text + "🔧 Запускаю функцию..."
+                            )
+                            last_update_time = time.time()
+                        except Exception:
+                            pass
+
+                        for tc in tool_calls_info:
+                            args = json.loads(tc['arguments']) if isinstance(tc['arguments'], str) else tc['arguments']
+                            result = await self.llm.call_function(tc['name'], args)
+                            result_str = json.dumps(result, ensure_ascii=False) if result is not None else "ok"
+                            await self.llm.add_tool_response(tc['id'], result_str)
+
+                        self.llm._safe_trim()
+                        continue
+
+                    # 3. ФИНАЛЬНЫЙ ОТВЕТ
+                    else:
+                        if not stream_text.strip():
+                            logger.warning("LLM вернула пустой ответ. Применяем инъекцию в память.")
+                            
+                            fallback_context = "[System Note: The LLM API returned an empty string. The user was notified about the network/API glitch. Be ready to answer their previous question if they ask again.]"
+                            await self.llm.add_assistant_message(content=fallback_context)
+                            
+                            user_alert = "⚠️ Нейросеть задумалась и не смогла выдать ответ из-за сбоя API. Я уже записал это в память, просто повтори вопрос или напиши 'продолжи'."
+                            try:
+                                await self.bot.edit_message_text(
+                                    chat_id=chat_id,
+                                    message_id=msg.message_id,
+                                    text=user_alert
+                                )
+                            except Exception:
+                                await self.bot.send_message(chat_id, user_alert)
+                            
+                            break
+
+                        # Успешный ответ
+                        await self.llm.add_assistant_message(content=stream_text)
+                        full_text += stream_text
+                        
+                        await self.send_jumis_response(
+                            chat_id=chat_id,
+                            message_id=msg.message_id,
+                            llm_response=full_text
+                        )
+                        break
+
+            except Exception as e:
+                logger.error(f"ФАТАЛЬНАЯ ОШИБКА в логике LLM: {e}", exc_info=True)
+
+                try:
+                    crash_note = f"[System Note: API connection crashed with error '{type(e).__name__}'. No response was generated.]"
+                    await self.llm.add_assistant_message(content=crash_note)
+                except Exception:
+                    pass
+
+                error_msg = (
+                    "⚠️ **Произошла ошибка при генерации ответа.**\n\n"
+                    f"**Тип:** `{type(e).__name__}`\n"
+                    f"**Детали:** `{str(e)}`"
+                )
+
+                if msg:
+                    try:
+                        await self.bot.edit_message_text(
+                            chat_id=chat_id,
+                            message_id=msg.message_id,
+                            text=error_msg,
+                            parse_mode="Markdown"
+                        )
+                    except Exception:
+                        await self.bot.send_message(chat_id, error_msg, parse_mode="Markdown")
+                else:
+                    await self.bot.send_message(chat_id, error_msg, parse_mode="Markdown")
 
 
     async def send_jumis_mess_handler(self, message):
-        """ Запуск Агента Jumis по входящему сообщению в телеграмм бот """
+            """ Запуск Агента Jumis по входящему сообщению в телеграм бот """
+            message_text = None
 
-        message_text = None
-        # user_id = message.from_user.id
+            if message.content_type == "voice":
+                message_text = await self.stt.transcribe_telegram_voice(self.bot, message.voice.file_id)
+                if not message_text:
+                    await message.answer("❌ Проблемы со связью или ошибками скачивания. Попробуй ещё раз.")
+                    return
 
-        if message.content_type == "voice":
-            # Вызываем абстрактный метод класса:
-            message_text = await self.stt.transcribe_telegram_voice(self.bot, message.voice.file_id)
+                MAX_LEN = 4096
+                prefix = "🎤 Распознано:\n"
+                max_text_len = MAX_LEN - len(prefix) - 3  
+                trimmed = message_text[:max_text_len]
+                if len(message_text) > max_text_len:
+                    trimmed += "..."
+                await message.answer(f"{prefix}{trimmed}")
 
-            if not message_text:
-                await message.answer(
-                    "❌ Проблемы со связью или ошибками скачивания. Попробуй ещё раз."
-                )
+            elif message.content_type == "text":
+                message_text = message.text
+
+            elif message.content_type == "video_note":
+                await message.answer("Видеосообщения пока не поддерживаются.")
+                return
+            elif message.content_type == "photo":
+                await message.answer("Фото пока не обрабатываются.")
+                return
+            elif message.content_type == "document":
+                await message.answer("Документы пока не принимаются.")
+                return
+            else:
+                await message.answer("Этот тип сообщения не поддерживается.")
                 return
 
-            # Готово! В message_text лежит распознанный текст
-            # print(f"Расшифровка: {message_text}")
-
-            MAX_LEN = 4096
-            prefix = "🎤 Распознано:\n"
-            max_text_len = MAX_LEN - len(prefix) - 3  
-            trimmed = message_text[:max_text_len]
-            if len(message_text) > max_text_len:
-                trimmed += "..."
-            await message.answer(f"{prefix}{trimmed}")
-
-        elif message.content_type == "text":
-            message_text = message.text
-
-        elif message.content_type == "video_note":
-            await message.answer("Видеосообщения пока не поддерживаются.")
-            return
-        
-        elif message.content_type == "photo":
-            await message.answer("Фото пока не обрабатываются.")
-            return
-        
-        elif message.content_type == "document":
-            await message.answer("Документы пока не принимаются.")
-            return
-        
-        else:
-            await message.answer("Этот тип сообщения не поддерживается.")
-            return
-
-
-
-        # =========================================================================
-        # БЛОК РАБОТЫ С LLM И ИНТЕРАКТИВОМ
-        # =========================================================================
-        msg = None
-        try:
-            system, tools = await self.llm.get_tools("jumis_agent")
-            msg = await message.answer("...")
-
-            # Добавляем сообщение пользователя в историю диалога
-            await self.llm.add_user_message(message_text)
-
-            full_text = ""          
-            buffer = ""
-            last_update_time = 0    
-
-            while True:
-                tool_calls_info = []      
-                has_tool_calls = False
-                stream_text = ""
-
-                # 1. СТРИМИНГ ОТВЕТА ОТ LLM
-                async for chunk in self.llm.refine_stream_tools(question=None, system=system, tools=tools):
-                    if chunk['type'] == 'text':
-                        stream_text += chunk['content']
-                        buffer += chunk['content']
-                        
-                        current_time = time.time()
-                        current_text = full_text + stream_text
-                        if len(buffer.strip()) > 5 and (current_time - last_update_time) >= 1.5:
-
-                            if len(current_text) > 4000:
-                                buffer = ""
-                                continue
-
-                            try:
-                                await self.bot.edit_message_text(
-                                    chat_id=message.chat.id,
-                                    message_id=msg.message_id,
-                                    text=current_text,
-                                    parse_mode=None
-                                )
-                                last_update_time = current_time
-                                buffer = ""
-                            except TelegramRetryAfter as e:
-                                logger.warning(f"Словили флуд внутри стрима. Спим {e.retry_after} сек.")
-                                await asyncio.sleep(e.retry_after)
-                                last_update_time = time.time()
-                            except TelegramBadRequest as e:
-                                if "can't parse entities" not in str(e):
-                                    logger.error(f"Ошибка ТГ при стриминге: {e}")
-                            except TelegramAPIError as e:
-                                logger.error(f"Общая ошибка ТГ при стриминге: {e}")
-
-                    elif chunk['type'] == 'tool':
-                        for tool_id, tool in chunk['data'].items():
-                            tool_calls_info.append({
-                                'id': tool_id,
-                                'name': tool['name'],
-                                'arguments': tool['arguments']
-                            })
-                            has_tool_calls = True
-
-                # 2. ВЫЗОВ ФУНКЦИЙ (ТУЛЗОВ)
-                if has_tool_calls:
-                    # Тут пустой stream_text — это НОРМАЛЬНО, модель молча вызвала функцию
-                    tool_calls_for_msg = []
-                    for tc in tool_calls_info:
-                        tool_calls_for_msg.append({
-                            "id": tc['id'],
-                            "type": "function",
-                            "function": {
-                                "name": tc['name'],
-                                "arguments": tc['arguments']
-                            }
-                        })
-                    await self.llm.add_assistant_message(content=stream_text, tool_calls=tool_calls_for_msg)
-                    full_text += stream_text + "\n"
-                    
-                    try:
-                        await self.bot.edit_message_text(
-                            chat_id=message.chat.id,
-                            message_id=msg.message_id,
-                            text=full_text + "🔧 Запускаю функцию..."
-                        )
-                        last_update_time = time.time()
-                    except Exception:
-                        pass
-
-                    for tc in tool_calls_info:
-                        args = json.loads(tc['arguments']) if isinstance(tc['arguments'], str) else tc['arguments']
-                        result = await self.llm.call_function(tc['name'], args)
-                        result_str = json.dumps(result, ensure_ascii=False) if result is not None else "ok"
-                        await self.llm.add_tool_response(tc['id'], result_str)
-
-                    self.llm._safe_trim()
-                    continue
-
-                # 3. ФИНАЛЬНЫЙ ОТВЕТ
-                else:
-                    # 🔥 ПЕРВАЯ ЛОВУШКА: Защита от пустого ответа без тулзов
-                    if not stream_text.strip():
-                        logger.warning("LLM вернула пустой ответ. Применяем инъекцию в память.")
-                        
-                        # 1. Записываем в контекст пояснение для модели на английском (чтобы она не сошла с ума)
-                        fallback_context = "[System Note: The LLM API returned an empty string. The user was notified about the network/API glitch. Be ready to answer their previous question if they ask again.]"
-                        await self.llm.add_assistant_message(content=fallback_context)
-                        
-                        # 2. Уведомляем пользователя (Не шлем пустой ответ в Телеграм!)
-                        user_alert = "⚠️ Нейросеть задумалась и не смогла выдать ответ из-за сбоя API. Я уже записал это в память, просто повтори вопрос или напиши 'продолжи'."
-                        # Возможно позже стоит перевести на Eng или даже мульти лангв
-                        try:
-                            await self.bot.edit_message_text(
-                                chat_id=message.chat.id,
-                                message_id=msg.message_id,
-                                text=user_alert
-                            )
-                        except Exception:
-                            await message.answer(user_alert)
-                        
-                        break # Выходим из цикла, всё спасено
-
-                    # ✅ Если всё ок, стандартная логика
-                    await self.llm.add_assistant_message(content=stream_text)
-                    full_text += stream_text
-                    
-                    await self.send_jumis_response(
-                        chat_id=message.chat.id,
-                        message_id=msg.message_id,
-                        llm_response=full_text
-                    )
-                    break
-
-        # =========================================================================
-        # ГЛОБАЛЬНЫЙ СПАСАТЕЛЬНЫЙ КРУГ ДЛЯ ОШИБОК LLM / API / ФУНКЦИЙ
-        # =========================================================================
-        except Exception as e:
-            logger.error(f"ФАТАЛЬНАЯ ОШИБКА в логике LLM: {e}")
-            logger.error(traceback.format_exc())
-
-            # 🔥 ВТОРАЯ ЛОВУШКА: Если API вообще крашнулось, закрываем вопрос пользователя заглушкой
-            try:
-                crash_note = f"[System Note: API connection crashed with error '{type(e).__name__}'. No response was generated.]"
-                await self.llm.add_assistant_message(content=crash_note)
-            except Exception:
-                pass # Если и тут крашнется, ну и ладно
-
-            error_msg = (
-                "⚠️ **Произошла ошибка при генерации ответа.**\n\n"
-                f"**Тип:** `{type(e).__name__}`\n"
-                f"**Детали:** `{str(e)}`"
+            # Передаем управление в ядро
+            await self.process_agent_request(
+                chat_id=message.chat.id, 
+                prompt_text=message_text
             )
 
-            if msg:
-                try:
-                    await self.bot.edit_message_text(
-                        chat_id=message.chat.id,
-                        message_id=msg.message_id,
-                        text=error_msg,
-                        parse_mode="Markdown"
-                    )
-                except Exception as edit_err:
-                    logger.error(f"Не удалось отредактировать заглушку ошибкой: {edit_err}")
-                    await message.answer(error_msg, parse_mode="Markdown")
+
+    async def message_processing(self, task_data: dict):
+        """Обработка состояния непрочитанных сообщений и авто-обновление/удаление уведомления."""
+        sender_id = task_data.get("sender_id")
+        recipient_id = task_data.get("recipient_id")
+        username = task_data.get("username") or "Без юзернейма"
+        content = task_data.get("content") or ""
+        direction = task_data.get("direction")
+        # chat_id = task_data.get("chat_id")
+        # msg_type = task_data.get("msg_type")
+        # created_at = task_data.get("created_at")
+        # tg_msg_id = task_data.get("tg_msg_id")
+        # msg_db_id = task_data.get("msg_db_id")
+
+
+        # 1. Логика входящих сообщений
+        if direction == "inbound_peer":
+            # Безопасное чтение текущего счетчика
+            prev_count = self.pending_peers.get(sender_id, {}).get("count", 0)
+            self.pending_peers[sender_id] = {
+                "username": username,
+                "count": prev_count + 1,
+                "last_text": content
+            }
+
+        # 2. Логика исходящих сообщений от Владельца
+        elif direction == "outbound_owner":
+            # Если мы написали человеку, которого НЕТ в списке ожидающих — ничего не делаем!
+            if recipient_id not in self.pending_peers:
+                return
+
+            # Если он БЫЛ в очереди — удаляем его
+            del self.pending_peers[recipient_id]
+
+            # Если после этого очередь опустела — удаляем сообщение из Telegram и выходим
+            if not self.pending_peers:
+                if self.notif_msg_id:
+                    try:
+                        await self.bot.delete_message(
+                            chat_id=self.admin_id,
+                            message_id=self.notif_msg_id
+                        )
+                    except Exception as e:
+                        logger.warning(f"[JumisAgent] Не удалось удалить уведомление {self.notif_msg_id}: {e}")
+                    finally:
+                        self.notif_msg_id = None
+                return
+
+        # Защитная проверка: если очередь пуста, выходим
+        if not self.pending_peers:
+            return
+
+        # 3. Минималистичный Rich-текст (English & Ultra-Compact)
+        total_peers = len(self.pending_peers)
+        total_messages = sum(peer["count"] for peer in self.pending_peers.values())
+
+        # Компактный заголовок
+        lines = [
+            f"📥 <b>Inbox:</b> <code>{total_peers}</code> • 💬 <code>{total_messages}</code>\n"
+        ]
+
+        for peer_id, data in self.pending_peers.items():
+            u_name = data.get("username")
+            u_name_display = f"@{u_name}" if u_name and u_name != "Без юзернейма" else "Unknown User"
+            count = data.get("count", 1)
+            raw_text = data.get("last_text") or ""
+
+            # Экранируем спецсимволы (<, >, &), чтобы Telegram HTML не ломал разметку
+            safe_text = html.escape(raw_text.strip()) if raw_text.strip() else "<i>(media / empty)</i>"
+            
+            # Ограничиваем длину превью, если сообщение слишком длинное
+            if len(safe_text) > 180:
+                safe_text = safe_text[:177] + "..."
+
+            # Лаконичная карточка: кликабельный юзернейм + счетчик + цитата
+            peer_card = (
+                f"<a href=\"tg://user?id={peer_id}\"><b>{u_name_display}</b></a> • 💬 <b>{count}</b>\n"
+                f"<blockquote expandable>{safe_text}</blockquote>"
+            )
+            lines.append(peer_card)
+
+        text_message = "\n\n".join(lines)
+
+        # 4. Отправляем новое или редактируем существующее
+        try:
+            if not self.notif_msg_id:
+                # Создаем новое сообщение и запоминаем его ID
+                sent_msg = await self.bot.send_message(
+                    chat_id=self.admin_id,
+                    text=text_message,
+                    parse_mode="HTML",
+                    disable_web_page_preview=True
+                )
+                self.notif_msg_id = sent_msg.message_id
             else:
-                await message.answer(error_msg, parse_mode="Markdown")
+                # Тихо обновляем существующее
+                await self.bot.edit_message_text(
+                    chat_id=self.admin_id,
+                    message_id=self.notif_msg_id,
+                    text=text_message,
+                    parse_mode="HTML",
+                    disable_web_page_preview=True
+                )
+        except Exception as e:
+            # Если сообщение было удалено вручную в Telegram, сбрасываем ID для создания нового
+            logger.error(f"[JumisAgent] Ошибка обновления дашборда сообщений: {e}")
+            self.notif_msg_id = None
+  
+
+    async def run_queue_worker(self):
+            """ Внутренний цикл ожидания собщений входящие + исходящие Телеграмм"""
+            logger.info("[JumisAgent] Запущен фоновый слушатель очереди сообщений")
+            while True:
+                try:
+                    task_data = await self.queue_new_mess.get()
+                    # Передаю на обработку сообщения
+                    await self.message_processing(task_data)
+                except asyncio.CancelledError:
+                    break
+                except Exception as e:
+                    logger.error(f"💥 [JumisAgent Queue Error]: {e}", exc_info=True)
+                    await asyncio.sleep(1)
+                finally:
+                    self.queue_new_mess.task_done()
 
 
+    async def clear_pending_queue(self) -> str:
+        """
+        Инструмент для Юмис: полностью очищает список неотвеченных
+        и удаляет виджет-уведомление из чата Владельца.
+        """
+        try:
+            peers_count = len(self.pending_peers)
+            self.pending_peers.clear()
+
+            # Удаляем виджет из Telegram, если он существует
+            if self.notif_msg_id:
+                try:
+                    await self.bot.delete_message(
+                        chat_id=self.admin_id,
+                        message_id=self.notif_msg_id
+                    )
+                except Exception as e:
+                    logger.warning(f"[JumisAgent] Не удалось удалить виджет при очистке: {e}")
+                finally:
+                    self.notif_msg_id = None
+
+            if peers_count == 0:
+                logger.info("[JumisAgent] Очередь неотвеченных сообщений и так была пуста.")
+                return "Inbox queue was already empty. Dashboard widget reset."
+
+            logger.info(f"[JumisAgent] Очередь очищена. Сброшено диалогов: {peers_count}. Уведомление удалено.")
+            return f"Inbox queue successfully cleared. Dismissed dialogs count: {peers_count}."
+
+        except Exception as e:
+            logger.error(f"[JumisAgent] Ошибка при очистке очереди сообщений: {e}")
+            return f"Failed to clear inbox queue due to error: {e}"
 
 
+        
+    async def get_notifs_queue(self) -> str:
+        """Возвращает текущее состояние очереди неотвеченных сообщений."""
+        if not self.pending_peers:
+            return json.dumps({"status": "empty", "unread_peers_count": 0}, ensure_ascii=False)
 
+        unread_info = []
+        for peer_id, data in self.pending_peers.items():
+            u_name = f"@{data['username']}" if data.get("username") and data["username"] != "Без юзернейма" else "без username"
+            unread_info.append({
+                "peer_id": peer_id,
+                "username": u_name,
+                "unread_count": data.get("count", 1),
+                "last_text": data.get("last_text", "")
+            })
 
-# # Анализируем черновик субагента через то же ядро
-# prompt = f"Субагент подготовил черновик для клиента tg_id={client_tg_id}:\n{draft_text}"
-# system_prompt, _ = await self.llm.get_tools("jumis_agent")
-
-# result = await self.llm.call_with_tools(
-#     system=system_prompt,
-#     question=prompt
-# )
-
-# # Отправляем тебе результат в TG
-# msg = (
-#     f"📩 **[Анализ Субагента ➔ Юмис]**\n"
-#     f"👤 **Клиент:** `{client_tg_id}`\n\n"
-#     f"💡 **Решение ЮМИС:**\n{result.get('content')}"
-# )
-# await self.bot.send_message(chat_id=self.owner_tg_id, text=msg, parse_mode="Markdown")
-
-
-# async def cycle_mess_subagents(queue_req_jum):
-#     """  .."""
-#     logger.info("[QueueMessJum] Очередь сообщений для Jumis запущена.")
-
-#     while True:
-#         try:
-#             # Ждем следующее сообщение из очереди
-#             mess = await queue_req_jum.get()
-#             # Пеередавать Jumis
-
-#         except asyncio.CancelledError:
-#             break
-#         except Exception as e:
-#             logger.error(f"[QueueMessJum] Ошибка обработки задачи: {e}", exc_info=True)
+        return json.dumps({
+            "status": "success",
+            "unread_peers_count": len(self.pending_peers),
+            "unread_queue": unread_info
+        }, ensure_ascii=False)

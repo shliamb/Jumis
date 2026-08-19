@@ -34,7 +34,7 @@ litellm.callbacks = [DBTokenLogger()]       # Регистрируем клас�
 
 
 class LLMWorker:
-    def __init__(self, db_memory, db_users, db_messages):
+    def __init__(self, db_memory, db_users, db_messages, mytelethon):
         ''' Экземпляр работы с LLM через litellm '''
         
         # Проверяем наличие ключей в окружении (не вызовет KeyError, если какого-то ключа пока нет)
@@ -56,6 +56,9 @@ class LLMWorker:
         self.db_memory = db_memory
         self.db_users = db_users
         self.db_messages = db_messages
+        self.mytelethon = mytelethon
+        self.jumis_agent = None
+
 
     def _check_env_keys(self):
         """ Безопасная проверка загрузки API-ключей из .env """
@@ -63,6 +66,7 @@ class LLMWorker:
         missing = [key for key in required_keys if not os.getenv(key)]
         if missing:
             print(f"⚠️ [LLMWorker Warning] Следующие ключи не найдены в .env.llm: {', '.join(missing)}")
+
 
 
     @staticmethod
@@ -189,17 +193,12 @@ class LLMWorker:
                 sig = inspect.signature(func)
                 call_kwargs = dict(arguments)  # копируем аргументы
 
-                # Автоматически подставляем db_memory, если функция ждёт напрямую память
-                if 'db_memory' in sig.parameters:
-                    call_kwargs['db_memory'] = self.db_memory
-
-                # Автоматически подставляем db_users, если функция ждёт напрямую память
-                if 'db_users' in sig.parameters:
-                    call_kwargs['db_users'] = self.db_users
-
-                # Автоматически подставляем db_messages, если функция ждёт напрямую память
-                if 'db_messages' in sig.parameters:
-                    call_kwargs['db_messages'] = self.db_messages
+                # Автоматическая подстановка всех сервисов
+                if 'db_memory' in sig.parameters: call_kwargs['db_memory'] = self.db_memory
+                if 'db_users' in sig.parameters: call_kwargs['db_users'] = self.db_users
+                if 'db_messages' in sig.parameters: call_kwargs['db_messages'] = self.db_messages
+                if 'mytelethon' in sig.parameters: call_kwargs['mytelethon'] = self.mytelethon
+                if 'jumis_agent' in sig.parameters: call_kwargs['jumis_agent'] = self.jumis_agent
 
                 # Вызов в зависимости от типа функции (async/sync)
                 if inspect.iscoroutinefunction(func):

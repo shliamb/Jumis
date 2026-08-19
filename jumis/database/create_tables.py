@@ -60,6 +60,9 @@ def create_tables_in_db():
             comment TEXT,                                  -- Твоя личная ручная заметка о человеке
             summary TEXT,                                  -- Краткая выжимка диалога от ИИ для быстрого контекста
             
+            aliases TEXT,                                  -- Приметы/алиасы: "Петя, петух, младший брат, братик.."
+            aliases_vector vector(1536),                   -- Вектор для поиска (размерность модель эмбеддингов 768)
+
             is_admin BOOLEAN DEFAULT FALSE,                
             is_blocked BOOLEAN DEFAULT FALSE,              -- Игнорировать любые сообщения от него
             is_whitelisted BOOLEAN DEFAULT FALSE,          -- Белый список (например, отвечать ему в приоритете)
@@ -77,6 +80,10 @@ def create_tables_in_db():
 
         -- Индексы
         CREATE INDEX IF NOT EXISTS idx_users_category ON users(category);
+
+        -- Векторный индекс HNSW для мгновенного косинусного поиска по алиасам
+        CREATE INDEX IF NOT EXISTS idx_users_aliases_vector 
+        ON users USING hnsw (aliases_vector vector_cosine_ops);
         '''
         cursor.execute(create_table_users)
 
@@ -85,24 +92,39 @@ def create_tables_in_db():
         -- Таблица сырых сообщений (История диалогов)
         CREATE TABLE IF NOT EXISTS messages (
             id BIGSERIAL PRIMARY KEY,
-            tg_id BIGINT NOT NULL,                         -- Telegram ID собеседника (ID чата) chat_id = user_id для личных сообщений
-            tg_msg_id BIGINT,                              -- ID сообщения внутри Telegram
             
-            role VARCHAR(50) NOT NULL,                     -- user (собеседник), assistant (ты/ИИ)
-            content TEXT,                                  -- Текст сообщения или транскрибация
+            -- Кто и Кому (Участники)
+            chat_id BIGINT NOT NULL,                        -- ID чата (для лички = ID собеседника)
+            sender_id BIGINT NOT NULL,                      -- Telegram ID ОТПРАВИТЕЛЯ
+            recipient_id BIGINT NOT NULL,                   -- Telegram ID ПОЛУЧАТЕЛЯ
             
-            msg_type VARCHAR(50) DEFAULT 'text',           -- text, photo, video и т.д.
+            -- Идентификация сообщения в TG
+            tg_msg_id BIGINT NOT NULL,                      -- ID сообщения внутри Telegram
+            
+            -- Направление и Контент
+            direction VARCHAR(20) NOT NULL,                 -- 'inbound_peer' (входящее) или 'outbound_owner' (исходящее)
+            content TEXT,                                   -- Текст сообщения / транскрибация
+            
+            -- Тип и медиа
+            msg_type VARCHAR(50) DEFAULT 'text',            -- text, photo, voice, video, document
             media_file_id VARCHAR(500),
             media_local_path VARCHAR(1000),
+            media_duration INT,                             -- Длительность для аудио/видео
             
-            embedding VECTOR(768),                         -- Вектор текста
+            -- Векторы и системные поля
+            embedding VECTOR(768),
             is_embedded BOOLEAN DEFAULT FALSE,
-            
-            created_at TIMESTAMPTZ DEFAULT NOW()
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+
+            -- Защита от дублей
+            CONSTRAINT unique_msg_per_chat UNIQUE (chat_id, tg_msg_id),
+            -- Проверка валидности направления
+            CONSTRAINT check_direction CHECK (direction IN ('inbound_peer', 'outbound_owner'))
         );
 
-        CREATE INDEX IF NOT EXISTS idx_messages_tg_id_created ON messages(tg_id, created_at DESC);
-        CREATE INDEX IF NOT EXISTS idx_messages_embedding ON messages USING hnsw (embedding vector_cosine_ops);
+        -- Индексы для реактивной выборки истории
+        CREATE INDEX IF NOT EXISTS idx_messages_chat_history ON messages (chat_id, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_messages_sender ON messages (sender_id);
 
         '''
         cursor.execute(create_table_messages)
