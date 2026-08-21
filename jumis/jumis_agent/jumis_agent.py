@@ -733,22 +733,36 @@ class JumisAgent:
 
 
     async def message_processing(self, task_data: dict):
-        """Обработка состояния непрочитанных сообщений и авто-обновление/удаление уведомления."""
-        sender_id = task_data.get("sender_id")
-        recipient_id = task_data.get("recipient_id")
+        """ Логика работы виджета уведомлений (Плавающий дашборд):
+
+            1. Новый собеседник: 
+            Если пишет КТО-ТО НОВЫЙ — сносим старую плашку и отправляем новую в самый низ чата СО ЗВУКОМ (чтобы привлечь внимание).
+
+            2. Обновление диалога: 
+            Если приходят новые сообщения от ТЕХ ЖЕ людей или мы ИМ ОТВЕЧАЕМ — просто обновляем текст существующего сообщения на месте (без звука и без засорения чата).
+
+            3. Все отвечены: 
+            Как только очередь пустеет — полностью удаляем плашку из чата."""
+
+        
+        # 1. Приведение ID к единому типу int
+        raw_sender = task_data.get("sender_id")
+        raw_recipient = task_data.get("recipient_id")
+        sender_id = int(raw_sender) if raw_sender is not None else None
+        recipient_id = int(raw_recipient) if raw_recipient is not None else None
+
+        direction = task_data.get("direction")
         username = task_data.get("username") or "Без юзернейма"
         content = task_data.get("content") or ""
-        direction = task_data.get("direction")
-        # chat_id = task_data.get("chat_id")
-        # msg_type = task_data.get("msg_type")
-        # created_at = task_data.get("created_at")
-        # tg_msg_id = task_data.get("tg_msg_id")
-        # msg_db_id = task_data.get("msg_db_id")
 
+        # Флаг: появился ли человек, которого ДО ЭТОГО не было в очереди
+        is_new_peer = False
 
-        # 1. Логика входящих сообщений
-        if direction == "inbound_peer":
-            # Безопасное чтение текущего счетчика
+        # 2. Обновление локального словаря pending_peers
+        if direction == "inbound_peer" and sender_id:
+            if sender_id not in self.pending_peers:
+                is_new_peer = True  # Это новый собеседник (например, "В")
+            
             prev_count = self.pending_peers.get(sender_id, {}).get("count", 0)
             self.pending_peers[sender_id] = {
                 "username": username,
@@ -756,77 +770,63 @@ class JumisAgent:
                 "last_text": content
             }
 
-        # 2. Логика исходящих сообщений от Владельца
-        elif direction == "outbound_owner":
-            # Если мы написали человеку, которого НЕТ в списке ожидающих — ничего не делаем!
-            if recipient_id not in self.pending_peers:
-                return
+        elif direction == "outbound_owner" and recipient_id:
+            if recipient_id in self.pending_peers:
+                del self.pending_peers[recipient_id]
 
-            # Если он БЫЛ в очереди — удаляем его
-            del self.pending_peers[recipient_id]
-
-            # Если после этого очередь опустела — удаляем сообщение из Telegram и выходим
-            if not self.pending_peers:
-                if self.notif_msg_id:
-                    try:
-                        await self.bot.delete_message(
-                            chat_id=self.admin_id,
-                            message_id=self.notif_msg_id
-                        )
-                    except Exception as e:
-                        logger.warning(f"[JumisAgent] Не удалось удалить уведомление {self.notif_msg_id}: {e}")
-                    finally:
-                        self.notif_msg_id = None
-                return
-
-        # Защитная проверка: если очередь пуста, выходим
+        # -------------------------------------------------------------------
+        # СЦЕНАРИЙ 4: 0 сообщений (всем ответил) -> delete_message
+        # -------------------------------------------------------------------
         if not self.pending_peers:
+            if self.notif_msg_id:
+                try:
+                    await self.bot.delete_message(chat_id=self.admin_id, message_id=self.notif_msg_id)
+                except Exception as e:
+                    logger.error(f"[JumisAgent] Ошибка удаления виджета: {e}")
+                finally:
+                    self.notif_msg_id = None
             return
 
-        # 3. Минималистичный Rich-текст (English & Ultra-Compact)
+        # 3. Верстка HTML-текста
         total_peers = len(self.pending_peers)
         total_messages = sum(peer["count"] for peer in self.pending_peers.values())
 
-        # Компактный заголовок
-        lines = [
-            f"📥 <b>Inbox:</b> <code>{total_peers}</code> • 💬 <code>{total_messages}</code>\n"
-        ]
+        lines = [f"📥 <b>Inbox:</b> <code>{total_peers}</code> • 💬 <code>{total_messages}</code>\n"]
 
         for peer_id, data in self.pending_peers.items():
-            u_name = data.get("username")
-            u_name_display = f"@{u_name}" if u_name and u_name != "Без юзернейма" else "Unknown User"
+            u_name = data.get("username", "Unknown")
+            u_name_safe = html.escape(f"@{u_name}" if u_name != "Без юзернейма" else "Unknown User")
             count = data.get("count", 1)
             raw_text = data.get("last_text") or ""
-
-            # Экранируем спецсимволы (<, >, &), чтобы Telegram HTML не ломал разметку
             safe_text = html.escape(raw_text.strip()) if raw_text.strip() else "<i>(media / empty)</i>"
             
-            # Ограничиваем длину превью, если сообщение слишком длинное
             if len(safe_text) > 180:
                 safe_text = safe_text[:177] + "..."
 
-            # Лаконичная карточка: кликабельный юзернейм + счетчик + цитата
             peer_card = (
-                f"<a href=\"tg://user?id={peer_id}\"><b>{u_name_display}</b></a> • 💬 <b>{count}</b>\n"
+                f"<a href=\"tg://user?id={peer_id}\"><b>{u_name_safe}</b></a> • 💬 <b>{count}</b>\n"
                 f"<blockquote expandable>{safe_text}</blockquote>"
             )
             lines.append(peer_card)
 
         text_message = "\n\n".join(lines)
 
-        # 4. Отправляем новое или редактируем существующее
-        try:
-            if not self.notif_msg_id:
-                # Создаем новое сообщение и запоминаем его ID
-                sent_msg = await self.bot.send_message(
-                    chat_id=self.admin_id,
-                    text=text_message,
-                    parse_mode="HTML",
-                    disable_web_page_preview=True
-                )
-                self.notif_msg_id = sent_msg.message_id
-            else:
-                # Тихо обновляем существующее
+        # -------------------------------------------------------------------
+        # СЦЕНАРИЙ 3: + 1 новое от В -> delete_message(id1) и отправка вниз
+        # -------------------------------------------------------------------
+        if is_new_peer and self.notif_msg_id:
+            try:
+                await self.bot.delete_message(chat_id=self.admin_id, message_id=self.notif_msg_id)
+            except Exception as e:
+                logger.info(f"[JumisAgent] Старый виджет не найден при сносе: {e}")
+            finally:
+                self.notif_msg_id = None
+
+        # -------------------------------------------------------------------
+        # СЦЕНАРИЙ 2: +/- 1 от А -> edit_message_text(id1)
+        # -------------------------------------------------------------------
+        if self.notif_msg_id:
+            try:
                 await self.bot.edit_message_text(
                     chat_id=self.admin_id,
                     message_id=self.notif_msg_id,
@@ -834,27 +834,64 @@ class JumisAgent:
                     parse_mode="HTML",
                     disable_web_page_preview=True
                 )
+                return  # Успешно отредактировали старое сообщение, выходим
+            except TelegramBadRequest as e:
+                if "message is not modified" in str(e).lower():
+                    return
+                # Если сообщение было удалено вручную, сбрасываем ID и идем отправлять новое
+                self.notif_msg_id = None
+            except Exception as e:
+                logger.error(f"[JumisAgent] Ошибка edit_message_text: {e}")
+                self.notif_msg_id = None
+
+        # -------------------------------------------------------------------
+        # СЦЕНАРИЙ 1 & Пересоздание: send_message()
+        # -------------------------------------------------------------------
+        try:
+            sent_msg = await self.bot.send_message(
+                chat_id=self.admin_id,
+                text=text_message,
+                parse_mode="HTML",
+                disable_web_page_preview=True,
+                disable_notification=False if is_new_peer else True  # Звук только при создании/появлении нового пира
+            )
+            self.notif_msg_id = sent_msg.message_id
         except Exception as e:
-            # Если сообщение было удалено вручную в Telegram, сбрасываем ID для создания нового
-            logger.error(f"[JumisAgent] Ошибка обновления дашборда сообщений: {e}")
+            logger.error(f"[JumisAgent] Ошибка send_message: {e}", exc_info=True)
             self.notif_msg_id = None
   
 
+
+
     async def run_queue_worker(self):
-            """ Внутренний цикл ожидания собщений входящие + исходящие Телеграмм"""
+            """ Внутренний цикл ожидания сообщений входящие + исходящие Телеграмм """
             logger.info("[JumisAgent] Запущен фоновый слушатель очереди сообщений")
             while True:
                 try:
+                    # Ждем появления сообщения в очереди
                     task_data = await self.queue_new_mess.get()
-                    # Передаю на обработку сообщения
-                    await self.message_processing(task_data)
+                    msg_id = task_data.get("msg_db_id", "unknown")
+                    
+                    # ЛОГ 1: Поймали из очереди
+                    logger.info(f"[JumisAgent Worker] Взял из очереди сообщение: {msg_id}")
+
+                    # Оборачиваем в таймаут 10 секунд! 
+                    # Если Telegram API зависнет, воркер не умрет, а выбросит TimeoutError
+                    await asyncio.wait_for(self.message_processing(task_data), timeout=10.0)
+
+                    # ЛОГ 2: Успешно обработали
+                    logger.info(f"[JumisAgent Worker] Успешно обработал сообщение: {msg_id}")
+
+                except asyncio.TimeoutError:
+                    logger.error(f"💥 [JumisAgent Worker] ТАЙМАУТ! Зависла отправка сообщения {msg_id} в Telegram API.")
                 except asyncio.CancelledError:
                     break
                 except Exception as e:
-                    logger.error(f"💥 [JumisAgent Queue Error]: {e}", exc_info=True)
+                    logger.error(f"💥 [JumisAgent Worker] Критическая ошибка обработки: {e}", exc_info=True)
                     await asyncio.sleep(1)
                 finally:
                     self.queue_new_mess.task_done()
+
 
 
     async def clear_pending_queue(self) -> str:
@@ -911,3 +948,145 @@ class JumisAgent:
             "unread_peers_count": len(self.pending_peers),
             "unread_queue": unread_info
         }, ensure_ascii=False)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    # async def message_processing(self, task_data: dict):
+    #     """ Логика работы виджета уведомлений (Плавающий дашборд):
+
+    #         1. Новый собеседник: 
+    #         Если пишет КТО-ТО НОВЫЙ — сносим старую плашку и отправляем новую в самый низ чата СО ЗВУКОМ (чтобы привлечь внимание).
+
+    #         2. Обновление диалога: 
+    #         Если приходят новые сообщения от ТЕХ ЖЕ людей или мы ИМ ОТВЕЧАЕМ — просто обновляем текст существующего сообщения на месте (без звука и без засорения чата).
+
+    #         3. Все отвечены: 
+    #         Как только очередь пустеет — полностью удаляем плашку из чата."""
+        
+    #     sender_id = task_data.get("sender_id")
+    #     recipient_id = task_data.get("recipient_id")
+    #     username = task_data.get("username") or "Без юзернейма"
+    #     content = task_data.get("content") or ""
+    #     direction = task_data.get("direction")
+    #     # chat_id = task_data.get("chat_id")
+    #     # msg_type = task_data.get("msg_type")
+    #     # created_at = task_data.get("created_at")
+    #     # tg_msg_id = task_data.get("tg_msg_id")
+    #     # msg_db_id = task_data.get("msg_db_id")
+
+
+    #     # 1. Логика входящих сообщений
+    #     if direction == "inbound_peer":
+    #         # Безопасное чтение текущего счетчика
+    #         prev_count = self.pending_peers.get(sender_id, {}).get("count", 0)
+    #         self.pending_peers[sender_id] = {
+    #             "username": username,
+    #             "count": prev_count + 1,
+    #             "last_text": content
+    #         }
+
+    #     # 2. Логика исходящих сообщений от Владельца
+    #     elif direction == "outbound_owner":
+    #         # Если мы написали человеку, которого НЕТ в списке ожидающих — ничего не делаем!
+    #         if recipient_id not in self.pending_peers:
+    #             return
+
+    #         # Если он БЫЛ в очереди — удаляем его
+    #         del self.pending_peers[recipient_id]
+
+    #         # Если после этого очередь опустела — удаляем сообщение из Telegram и выходим
+    #         if not self.pending_peers:
+    #             if self.notif_msg_id:
+    #                 try:
+    #                     await self.bot.delete_message(chat_id=self.admin_id, message_id=self.notif_msg_id)
+    #                 except TelegramBadRequest as e:
+    #                     if "message to delete not found" not in str(e).lower():
+    #                         logger.error(f"[JumisAgent] Ошибка удаления уведомления: {e}")
+    #                 except Exception as e:
+    #                     logger.error(f"[JumisAgent] Неизвестная ошибка удаления: {e}")
+    #                 finally:
+    #                     self.notif_msg_id = None
+    #             return
+
+    #     # Защитная проверка: если очередь пуста, выходим
+    #     if not self.pending_peers:
+    #         return
+
+    #     # 3. Минималистичный Rich-текст (English & Ultra-Compact)
+    #     total_peers = len(self.pending_peers)
+    #     total_messages = sum(peer["count"] for peer in self.pending_peers.values())
+
+    #     # Компактный заголовок
+    #     lines = [
+    #         f"📥 <b>Inbox:</b> <code>{total_peers}</code> • 💬 <code>{total_messages}</code>\n"
+    #     ]
+
+    #     for peer_id, data in self.pending_peers.items():
+    #         u_name = data.get("username")
+    #         u_name_display = f"@{u_name}" if u_name and u_name != "Без юзернейма" else "Unknown User"
+    #         count = data.get("count", 1)
+    #         raw_text = data.get("last_text") or ""
+
+    #         # Экранируем спецсимволы (<, >, &), чтобы Telegram HTML не ломал разметку
+    #         safe_text = html.escape(raw_text.strip()) if raw_text.strip() else "<i>(media / empty)</i>"
+            
+    #         # Ограничиваем длину превью, если сообщение слишком длинное
+    #         if len(safe_text) > 180:
+    #             safe_text = safe_text[:177] + "..."
+
+    #         # Лаконичная карточка: кликабельный юзернейм + счетчик + цитата
+    #         peer_card = (
+    #             f"<a href=\"tg://user?id={peer_id}\"><b>{u_name_display}</b></a> • 💬 <b>{count}</b>\n"
+    #             f"<blockquote expandable>{safe_text}</blockquote>"
+    #         )
+    #         lines.append(peer_card)
+
+    #     text_message = "\n\n".join(lines)
+
+    #     # 4. Отправляем новое или редактируем существующее
+    #     try:
+    #         if not self.notif_msg_id:
+    #             # Создаем новое сообщение и запоминаем его ID
+    #             sent_msg = await self.bot.send_message(
+    #                 chat_id=self.admin_id,
+    #                 text=text_message,
+    #                 parse_mode="HTML",
+    #                 disable_web_page_preview=True
+    #             )
+    #             self.notif_msg_id = sent_msg.message_id
+    #         else:
+    #             try:
+    #                 await self.bot.edit_message_text(
+    #                     chat_id=self.admin_id,
+    #                     message_id=self.notif_msg_id,
+    #                     text=text_message,
+    #                     parse_mode="HTML",
+    #                     disable_web_page_preview=True
+    #                 )
+    #             except TelegramBadRequest as e:
+    #                 # ИГНОРИРУЕМ ОШИБКУ если текст точно такой же (например, пришло 2 одинаковых фото)
+    #                 if "message is not modified" in str(e).lower():
+    #                     pass
+    #                 else:
+    #                     raise e # Прокидываем в общий except
+
+    #     except Exception as e:
+    #         logger.error(f"[JumisAgent] Ошибка обновления дашборда сообщений: {e}")
+    #         # Сбрасываем ID только при реальной ошибке, чтобы в следующий раз создать заново
+    #         self.notif_msg_id = None

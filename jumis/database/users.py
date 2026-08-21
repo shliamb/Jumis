@@ -3,19 +3,21 @@ from typing import Any, Dict, List, Optional
 from logs.set_logger import set_logger
 logger = set_logger(name="db")
 from database import db
-# import uuid
-# import asyncpg
 
 
 
 
 class DBUsers():
+    
     def __init__(self):
         self.db = db
         self.users_categories: list[dict] = []
 
 
+    #######################
     ###### CATEGORY #######
+    #######################
+
 
     async def init(self):
         """Вызывается один раз при старте приложения"""
@@ -83,34 +85,15 @@ class DBUsers():
 
 
 
-
-
+    #####################
     ####### USERS #######
+    #####################
 
 
     async def chek_tg_id(self, tg_id: int):
         """ ... """
         query = "INSERT INTO users (tg_id) VALUES ($1) ON CONFLICT (tg_id) DO NOTHING"
         return await self.db.execute(query, tg_id) or False
-
-
-
-    # async def add_user(self, user_data: dict) -> bool:
-    #     """Добавить пользователя"""
-    #     keys = list(user_data.keys())
-    #     values = list(user_data.values())
-        
-    #     columns = ", ".join(keys)
-    #     placeholders = ", ".join([f"${i+1}" for i in range(len(values))])
-        
-    #     query = f"INSERT INTO users ({columns}) VALUES ({placeholders})"
-        
-    #     try:
-    #         await self.db.execute(query, *values)
-    #         return True
-    #     except Exception as e:
-    #         logger.error(f"Error adding user: {e}")
-    #         return False
 
 
     async def add_user(self, user_data: dict) -> bool:
@@ -137,141 +120,6 @@ class DBUsers():
             return False
 
 
-
-    async def search_users_by_alias(
-            self,
-            embedding: list,
-            limit: int = 5,
-            min_similarity: float = 0.75
-        ) -> List[Dict[str, Any]]:
-            """
-            Векторный поиск пользователей по полю aliases_vector (косинусное сходство).
-            """
-            emb_str = str(embedding)
-            
-            query = """
-                SELECT id, tg_id, username, full_name, phone, category, comment, summary, 
-                    aliases, is_admin, is_blocked, is_whitelisted, lang_code,
-                    (1 - (aliases_vector <=> $1::vector)) AS similarity
-                FROM users
-                WHERE aliases_vector IS NOT NULL
-                AND (1 - (aliases_vector <=> $1::vector)) >= $2
-                ORDER BY aliases_vector <=> $1::vector ASC
-                LIMIT $3;
-            """
-
-            try:
-                records = await self.db.fetch(query, emb_str, min_similarity, limit)
-                return [dict(rec) for rec in records] if records else []
-            except Exception as e:
-                logger.error(f"[DBUsers] Ошибка векторного поиска по aliases_vector: {e}")
-                return []
-
-
-
-    async def db_get_user(
-        self,
-        user_id: int | str | None = None, 
-        tg_id: int | str | None = None, 
-        username: str | None = None
-    ) -> dict:
-        """Единый поиск пользователя в базе по id, tg_id или username."""
-        query = None
-        param = None
-
-        try:
-            # 1. Поиск по ID в базе (проверяем именно на None, а не на truthy)
-            if user_id is not None and str(user_id).strip():
-                query = "SELECT * FROM users WHERE id = $1"
-                param = int(user_id)
-
-            # 2. Поиск по Telegram ID
-            elif tg_id is not None and str(tg_id).strip():
-                query = "SELECT * FROM users WHERE tg_id = $1"
-                param = int(tg_id)
-
-            # 3. Поиск по username
-            elif username and str(username).strip():
-                query = "SELECT * FROM users WHERE username = $1"
-                param = str(username).strip().lstrip("@")
-
-            # Если ни один параметр не передан — выходим
-            if not query:
-                logger.warning("db_get_user called with no valid parameters.")
-                return {}
-
-            record = await self.db.fetchrow(query, param)
-            return dict(record) if record else {}
-
-        except ValueError as e:
-            logger.error("db_get_user type conversion error: %s", e)
-            return {}
-        except Exception as e:
-            logger.error("db_get_user database error: %s", e)
-            return {}
-
-
-    # async def db_get_user(
-    #         self,
-    #         user_id: int | str | None = None, 
-    #         tg_id: int | str | None = None, 
-    #         username: str | None = None
-    #     ) -> dict:
-    #         """Единый поиск пользователя в базе по id, tg_id или username (без вектора)."""
-    #         # Явно перечисляем поля, чтобы asyncpg не спотыкался об aliases_vector
-    #         fields = """
-    #             id, tg_id, username, full_name, phone, category, 
-    #             comment, summary, aliases, is_admin, is_blocked, 
-    #             is_whitelisted, is_bot, lang_code, model_default, 
-    #             model_cheap, model_smart, created_at, updated_at
-    #         """
-            
-    #         query = None
-    #         param = None
-
-    #         try:
-    #             if user_id is not None and str(user_id).strip():
-    #                 query = f"SELECT {fields} FROM users WHERE id = $1"
-    #                 param = int(user_id)
-
-    #             elif tg_id is not None and str(tg_id).strip():
-    #                 query = f"SELECT {fields} FROM users WHERE tg_id = $1"
-    #                 param = int(tg_id)
-
-    #             elif username and str(username).strip():
-    #                 query = f"SELECT {fields} FROM users WHERE LOWER(username) = LOWER($1)"
-    #                 param = str(username).strip().lstrip("@")
-
-    #             if not query:
-    #                 logger.warning("db_get_user called with no valid parameters.")
-    #                 return {}
-
-    #             record = await self.db.fetchrow(query, param)
-    #             return dict(record) if record else {}
-
-    #         except ValueError as e:
-    #             logger.error("db_get_user type conversion error: %s", e)
-    #             return {}
-    #         except Exception as e:
-    #             # Выводим реальную ошибку в лог, чтобы не гадать
-    #             logger.error("db_get_user database error: %s", e, exc_info=True)
-    #             return {}
-
-
-
-    async def get_all_users(self) -> list[dict]:
-        """Забрать данные всех пользователей."""
-        query = "SELECT * FROM users ORDER BY id DESC"
-        records = await self.db.fetch(query)
-        return [dict(rec) for rec in records]
-
-
-    async def get_users_count(self) -> int:
-        """Получить общее количество пользователей"""
-        query = "SELECT COUNT(*) FROM users"
-        return await self.db.fetchval(query)
-
-
     async def db_update_user(self, user_data: dict) -> bool:
         """
         Универсальное обновление данных пользователя.
@@ -285,7 +133,7 @@ class DBUsers():
             logger.error("db_update_user: Empty or invalid user_data provided.")
             return False
 
-        # 1. Делаем копию, чтобы .pop() не портил оригинальный словарь в месте вызова
+        # 1. Делаем копию, чтобы .pop() не портил оригинальный словарь
         data = user_data.copy()
 
         # 2. Вынимаем идентификаторы (в порядке приоритета: id -> tg_id -> username)
@@ -301,13 +149,33 @@ class DBUsers():
             logger.warning("db_update_user: No fields left to update.")
             return False
 
-        # 3. Собираем динамический SET через items() для гарантии порядка ключей и значений
+        # 3. Собираем динамический SET с проверкой векторов и алиасов
         set_parts = []
         values = []
         
-        for idx, (key, val) in enumerate(data.items(), start=1):
-            set_parts.append(f"{key} = ${idx}")
-            values.append(val)
+        for key, val in data.items():
+            param_idx = len(values) + 1
+
+            # Проверка и подготовка эмбеддинга для pgvector
+            if key == 'aliases_vector':
+                if val is None:
+                    set_parts.append(f"aliases_vector = ${param_idx}")
+                    values.append(None)
+                else:
+                    # Приводим list/tuple к строке '[0.1, 0.2, ...]' и кастим в ::vector
+                    vec_str = str(list(val)) if isinstance(val, (list, tuple)) else str(val)
+                    set_parts.append(f"aliases_vector = ${param_idx}::vector")
+                    values.append(vec_str)
+
+            # Проверка и очистка текста алиасов
+            elif key == 'aliases':
+                clean_aliases = str(val).strip() if val is not None else None
+                set_parts.append(f"aliases = ${param_idx}")
+                values.append(clean_aliases)
+
+            else:
+                set_parts.append(f"{key} = ${param_idx}")
+                values.append(val)
 
         # Автоматически обновляем штамп времени изменения
         set_parts.append("updated_at = NOW()")
@@ -321,7 +189,6 @@ class DBUsers():
             where_clause = f"tg_id = ${where_idx}"
             values.append(tg_id)
         else:
-            # Зачищаем @ если забыли срезать ранее
             where_clause = f"username = ${where_idx}"
             values.append(str(username).strip().lstrip("@"))
 
@@ -334,7 +201,6 @@ class DBUsers():
         try:
             result = await self.db.execute(query, *values)
             
-            # asyncpg возвращает строку вида "UPDATE 1" или "UPDATE 0"
             if result and "UPDATE 0" in result:
                 target = user_id or tg_id or username
                 logger.warning("db_update_user: User not found in DB (target: %s).", target)
@@ -348,120 +214,131 @@ class DBUsers():
             return False
 
 
-    # async def edit_user_tg_id(self, user_data: dict) -> bool:
-    #     """Обновить данные user (tg_id обязателен)"""
-        
-    #     if 'tg_id' not in user_data:
-    #         logger.error("No tg_id in user_data")
-    #         return False
-        
-    #     tg_id = user_data.pop('tg_id')  # вынимаем tg_id
-    #     if not user_data:  # если кроме tg_id ничего нет
-    #         return False
-        
-    #     # Формируем SET
-    #     set_parts = [f"{key} = ${i+1}" for i, key in enumerate(user_data.keys())]
-    #     values = list(user_data.values())
-    #     values.append(tg_id)  # tg_id для WHERE в конце
-        
-    #     query = f"""
-    #         UPDATE users 
-    #         SET {', '.join(set_parts)}
-    #         WHERE tg_id = ${len(values)}
-    #     """
-        
-    #     try:
-    #         await db.execute(query, *values)
-    #         return True
-    #     except Exception as e:
-    #         logger.error(f"Error updating user {tg_id}: {e}")
-    #         return False
+    async def search_users(
+        self,
+        user_id: Optional[int] = None,
+        tg_id: Optional[int] = None,
+        category: Optional[str] = None,
+        query: Optional[str] = None,
+        vector: Optional[list] = None,
+        limit: int = 5,
+        min_similarity: float = 0.75,
+        **kwargs
+    ) -> List[Dict[str, Any]]:
+        """
+        Универсальный поиск пользователей с каскадной логикой приоритетов.
+        """
+        # Поля выборки без векторного столбца
+        fields = """
+            id, tg_id, username, full_name, phone, category, 
+            comment, summary, aliases, is_admin, is_blocked, 
+            is_whitelisted, is_bot, lang_code, model_default, 
+            model_cheap, model_smart, created_at, updated_at
+        """
 
+        # -----------------------------------------------------------------
+        # ШАГ 1. ТОЧНЫЙ ПОИСК ПО ИДЕНТИФИКАТОРАМ (Самый быстрый путь)
+        # -----------------------------------------------------------------
+        if user_id is not None or tg_id is not None:
+            conditions = []
+            params = []
+            idx = 1
 
-    # async def edit_user_id(user_data: dict) -> bool:
-    #     """Обновить данные user (id обязателен)"""
-        
-    #     if 'id' not in user_data:
-    #         logger.error("No id in user_data")
-    #         return False
-        
-    #     id = user_data.pop('id')  # вынимаем id
-    #     if not user_data:  # если кроме id ничего нет
-    #         return False
-        
-    #     # Формируем SET
-    #     set_parts = [f"{key} = ${i+1}" for i, key in enumerate(user_data.keys())]
-    #     values = list(user_data.values())
-    #     values.append(id)  # id для WHERE в конце
-        
-    #     query = f"""
-    #         UPDATE users 
-    #         SET {', '.join(set_parts)}
-    #         WHERE id = ${len(values)}
-    #     """
-        
-    #     try:
-    #         await self.db.execute(query, *values)
-    #         return True
-    #     except Exception as e:
-    #         logger.error(f"Error updating user {id}: {e}")
-    #         return False
+            if user_id is not None:
+                conditions.append(f"id = ${idx}")
+                params.append(user_id)
+                idx += 1
+            elif tg_id is not None:
+                conditions.append(f"tg_id = ${idx}")
+                params.append(tg_id)
+                idx += 1
 
+            if category and category != "not_defined":
+                conditions.append(f"category = ${idx}")
+                params.append(category)
 
-    async def get_user_by_phone(self, phone: str) -> dict:
-        """Найти пользователя по телефону"""
-        query = "SELECT * FROM users WHERE phone = $1"
-        record = await self.db.fetchrow(query, phone)
-        if record:
-            return dict(record)
-        return {}
+            sql = f"SELECT {fields} FROM users WHERE {' AND '.join(conditions)} LIMIT 1;"
+            
+            try:
+                records = await self.db.fetch(sql, *params)
+                return [dict(r) for r in records] if records else []
+            except Exception as e:
+                logger.error(f"[DBUsers] Ошибка точечного поиска пользователей: {e}")
+                return []
 
+        # -----------------------------------------------------------------
+        # ШАГ 2. ВЕКТОРНЫЙ ПОИСК (Если передан вектор эмбеддинга)
+        # -----------------------------------------------------------------
+        if vector is not None:
+            emb_str = str(vector)
+            conditions = [
+                "aliases_vector IS NOT NULL",
+                "(1 - (aliases_vector <=> $1::vector)) >= $2"
+            ]
+            params = [emb_str, min_similarity]
+            idx = 3
 
+            if category and category != "not_defined":
+                conditions.append(f"category = ${idx}")
+                params.append(category)
+                idx += 1
 
-    async def get_user_by_telegram_name(self, telegram_name: str) -> dict:
-        """Найти пользователя по telegram name"""
-        query = "SELECT * FROM users WHERE username = $1"
-        record = await self.db.fetchrow(query, telegram_name)
-        if record:
-            return dict(record)
-        return {}
+            params.append(limit)
+            limit_idx = idx
 
+            sql = f"""
+                SELECT {fields}, (1 - (aliases_vector <=> $1::vector)) AS similarity
+                FROM users
+                WHERE {' AND '.join(conditions)}
+                ORDER BY aliases_vector <=> $1::vector ASC
+                LIMIT ${limit_idx};
+            """
+            
+            try:
+                records = await self.db.fetch(sql, *params)
+                if records:
+                    return [dict(r) for r in records]
+            except Exception as e:
+                logger.error(f"[DBUsers] Ошибка векторного поиска пользователей: {e}")
 
-    async def search_users(self, search_data: dict) -> list[dict]:
-        """Поиск пользователей по различным фильтрам и поисковой строке."""
-        sql = "SELECT * FROM users WHERE 1=1"
+        # -----------------------------------------------------------------
+        # ШАГ 3. ТЕКСТОВЫЙ ПОИСК ПО ПОЛЯМ (Фоллбэк для query без вектора)
+        # -----------------------------------------------------------------
+        conditions = []
         params = []
-        param_idx = 1
+        idx = 1
 
-        query = search_data.get("query")
-        user_id = search_data.get("user_id")
-        tg_id = search_data.get("tg_id")
-        category = search_data.get("category")
-        limit = search_data.get("limit") or 10
-
-        if user_id is not None:
-            sql += f" AND id = ${param_idx}"
-            params.append(user_id)
-            param_idx += 1
-
-        if tg_id is not None:
-            sql += f" AND tg_id = ${param_idx}"
-            params.append(tg_id)
-            param_idx += 1
+        if query and str(query).strip():
+            clean_q = f"%{str(query).strip().lstrip('@')}%"
+            conditions.append(
+                f"(username ILIKE ${idx} OR full_name ILIKE ${idx} OR aliases ILIKE ${idx} OR comment ILIKE ${idx})"
+            )
+            params.append(clean_q)
+            idx += 1
 
         if category and category != "not_defined":
-            sql += f" AND category = ${param_idx}"
+            conditions.append(f"category = ${idx}")
             params.append(category)
-            param_idx += 1
+            idx += 1
 
-        if query:
-            # Поиск без учета регистра по имени, юзернейму, заметке и телефону
-            sql += f" AND (username ILIKE ${param_idx} OR full_name ILIKE ${param_idx} OR comment ILIKE ${param_idx} OR phone ILIKE ${param_idx})"
-            params.append(f"%{query.strip()}%")
-            param_idx += 1
-
-        sql += f" ORDER BY id DESC LIMIT ${param_idx}"
+        where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        
         params.append(limit)
+        limit_idx = idx
 
-        records = await self.db.fetch(sql, *params)
-        return [dict(rec) for rec in records]
+        sql = f"""
+            SELECT {fields}
+            FROM users
+            {where_clause}
+            ORDER BY id DESC
+            LIMIT ${limit_idx};
+        """
+
+        try:
+            records = await self.db.fetch(sql, *params)
+            return [dict(r) for r in records] if records else []
+        except Exception as e:
+            logger.error(f"[DBUsers] Ошибка текстового/общего поиска пользователей: {e}")
+            return []
+
+

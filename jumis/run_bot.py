@@ -106,7 +106,8 @@ async def main_bot() -> None:
         db_memory=db_memory, 
         db_users=db_users, 
         db_messages=db_messages,
-        mytelethon=mytelethon
+        mytelethon=mytelethon,
+        queue_new_mess=queue_new_mess
     )
     dp["llm"] = llm  # Доступен во всех хэндлерах через `llm` или контекст
 

@@ -1,5 +1,7 @@
 # master/telethoner/mytelethon.py
 import asyncio
+import datetime
+import time
 from urllib.parse import urlparse
 from telethon import TelegramClient, events, connection, types
 
@@ -20,6 +22,7 @@ class myTelethon:
         self.current_proxy_index = -1   # индекс последнего успешного прокси
         self.error_limit = ERR_PROXY_LIMIT
         self.queue_messages = queue_messages
+        self.me_id = None
 
 
     def _parse_proxy_str(self, proxy_str: str):
@@ -119,6 +122,77 @@ class myTelethon:
             self.client = TelegramClient('session_jumis', API_ID, API_HASH)
 
 
+
+
+        @self.client.on(events.MessageEdited())
+        async def reaction_handler(event):
+            # 1. Фильтруем только личные сообщения
+            if not event.is_private:
+                return
+
+            # 2. Проверяем наличие реакций в обновленном сообщении
+            reactions = getattr(event.message, "reactions", None)
+            if not reactions or not getattr(reactions, "recent_reactions", None):
+                return
+
+            # 3. Получаем объект чата (собеседника)
+            chat = await event.get_chat()
+
+            if not chat or getattr(chat, "bot", False):
+                return
+
+            # 4. Кэшируем свой ID
+            if not hasattr(self, "me_id") or not self.me_id:
+                me = await self.client.get_me()
+                self.me_id = me.id
+
+            # 5. Находим самую последнюю поставленную реакцию
+            latest_reaction = max(reactions.recent_reactions, key=lambda r: r.date)
+            reactor_id = latest_reaction.peer_id.user_id if isinstance(latest_reaction.peer_id, types.PeerUser) else None
+
+            # -------------------------------------------------------------------
+            # ВЕТКА 1: Реакция собеседника (Peer)
+            # -------------------------------------------------------------------
+            if reactor_id != self.me_id:
+                # Пока ничего не делаем, задел на будущее
+                logger.debug(f"[Reaction] Собеседник {chat.id} поставил реакцию.")
+                return
+
+            # -------------------------------------------------------------------
+            # ВЕТКА 2: Твоя реакция (Owner)
+            # -------------------------------------------------------------------
+            emoji = getattr(latest_reaction.reaction, "emoticon", "❤")
+
+            # ВАЖНО: В user_payload передаем ТВОЙ ID (отправителя), 
+            # чтобы IngestWorker поставил direction = 'outbound_owner'
+            user_payload = {
+                "tg_id": self.me_id,  # (Ты отправитель!)
+                "username": "owner",
+                "first_name": "Owner",
+                "last_name": None,
+            }
+
+            synthetic_msg_id = -int(latest_reaction.date.timestamp() * 1000)
+
+            # В message_payload передаем ID чата/собеседника
+            message_payload = {
+                "tg_msg_id": synthetic_msg_id,
+                "chat_id": chat.id,   # (Получатель реакта)
+                "is_outgoing": True,
+                "content": f"Реакция: {emoji}",
+                "created_at": latest_reaction.date,
+                "msg_type": "reaction",
+                "media_file_id": None,
+                "media_name": None,
+            }
+
+            task_payload = {"user": user_payload, "message": message_payload}
+            await self.queue_messages.put(task_payload)
+
+
+
+
+
         @self.client.on(events.NewMessage())
         async def handler(event):
 
@@ -128,6 +202,7 @@ class myTelethon:
 
             # 2. Получаем объект чата (собеседника)
             chat = await event.get_chat()
+
             if not chat:
                 return
 
@@ -137,8 +212,9 @@ class myTelethon:
 
             # 4. Если сообщение входящее, проверяем отправителя на скам / фейк
             sender = await event.get_sender()
+
             if not event.out:
-                # sender = await event.get_sender()
+
                 if not sender:
                     return
 
@@ -185,7 +261,6 @@ class myTelethon:
             # ливаются в jumis/ingest/worker.py
             task_payload = {"user": user_payload, "message": message_payload}
             await self.queue_messages.put(task_payload)
-
 
 
 
@@ -318,4 +393,103 @@ class myTelethon:
             error_msg = f"Не удалось отправить сообщение на {target_log}: {e}"
             print(error_msg)
             return f"❌ Ошибка отправки на {target_log}.\nВозможно, у вас нет открытого диалога с пользователем или он вас заблокировал."
+
+
+
+
+        # @self.client.on(events.MessageEdited())
+        # async def reaction_handler(event):
+        #     # 1. Фильтруем только личные сообщения
+        #     if not event.is_private:
+        #         return
+
+        #     # 2. Проверяем наличие реакций в обновленном сообщении
+        #     reactions = getattr(event.message, "reactions", None)
+        #     if not reactions or not getattr(reactions, "recent_reactions", None):
+        #         return
+
+        #     # 3. Получаем объект чата (собеседника)
+        #     chat = await event.get_chat()
+        #     if not chat or getattr(chat, "bot", False):
+        #         return
+
+        #     # 4. Кэшируем свой ID
+        #     if not hasattr(self, "me_id") or not self.me_id:
+        #         me = await self.client.get_me()
+        #         self.me_id = me.id
+
+        #     # 5. Находим самую последнюю поставленную реакцию
+        #     latest_reaction = max(reactions.recent_reactions, key=lambda r: r.date)
+        #     reactor_id = latest_reaction.peer_id.user_id if isinstance(latest_reaction.peer_id, types.PeerUser) else None
+
+        #     # -------------------------------------------------------------------
+        #     # ВЕТКА 1: Реакция собеседника (Peer)
+        #     # -------------------------------------------------------------------
+        #     if reactor_id != self.me_id:
+        #         # Пока ничего не делаем, задел на будущее
+        #         logger.debug(f"[Reaction] Собеседник {chat.id} поставил реакцию.")
+        #         return
+
+        #     # -------------------------------------------------------------------
+        #     # ВЕТКА 2: Твоя реакция (Owner)
+        #     # -------------------------------------------------------------------
+        #     emoji = getattr(latest_reaction.reaction, "emoticon", "❤")
+
+        #     # ВАЖНО: В user_payload передаем ТВОЙ ID (отправителя), 
+        #     # чтобы IngestWorker поставил direction = 'outbound_owner'
+        #     user_payload = {
+        #         "tg_id": self.me_id,  # 1666495 (Ты отправитель!)
+        #         "username": "owner",
+        #         "first_name": "Owner",
+        #         "last_name": None,
+        #     }
+
+        #     synthetic_msg_id = -int(latest_reaction.date.timestamp() * 1000)
+
+        #     # В message_payload передаем ID чата/собеседника
+        #     message_payload = {
+        #         "tg_msg_id": synthetic_msg_id,
+        #         "chat_id": chat.id,   # 6674458591 (Получатель реакта)
+        #         "is_outgoing": True,
+        #         "content": f"Реакция: {emoji}",
+        #         "created_at": latest_reaction.date,
+        #         "msg_type": "text",
+        #         "media_file_id": None,
+        #         "media_name": None,
+        #     }
+
+        #     task_payload = {"user": user_payload, "message": message_payload}
+        #     await self.queue_messages.put(task_payload)
+
+
+        # @self.client.on(events.MessageEdited())
+        # async def reaction_handler(event):
+        #     # 1. Только личные чаты
+        #     if not event.is_private:
+        #         return
+
+        #     # 2. Проверяем, что в отредактированном сообщении есть блок реакций
+        #     reactions = getattr(event.message, "reactions", None)
+        #     if not reactions or not getattr(reactions, "recent_reactions", None):
+        #         return
+
+        #     # 3. Кэшируем свой ID
+        #     if not hasattr(self, "me_id") or not self.me_id:
+        #         me = await self.client.get_me()
+        #         self.me_id = me.id
+
+        #     # 4. Достаем самую свежую реакцию
+        #     latest_reaction = max(reactions.recent_reactions, key=lambda r: r.date)
+            
+        #     # 5. Достаем ID того, кто ее поставил
+        #     reactor_id = latest_reaction.peer_id.user_id if isinstance(latest_reaction.peer_id, types.PeerUser) else None
+
+        #     if reactor_id == self.me_id:
+        #         print(f"Лайк поставлен мной! (Чат: {event.chat_id}, Msg: {event.id})")
+        #     else:
+        #         print(f"Лайк поставлен собеседником! (Чат: {event.chat_id}, Msg: {event.id})")
+
+
+        #     # Лайк поставлен мной! (Чат: 6674458591, Msg: 624499)
+        #     # Лайк поставлен собеседником! (Чат: 6674458591, Msg: 624498)
 

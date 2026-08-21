@@ -34,7 +34,7 @@ litellm.callbacks = [DBTokenLogger()]       # Регистрируем клас�
 
 
 class LLMWorker:
-    def __init__(self, db_memory, db_users, db_messages, mytelethon):
+    def __init__(self, db_memory, db_users, db_messages, mytelethon, queue_new_mess):
         ''' Экземпляр работы с LLM через litellm '''
         
         # Проверяем наличие ключей в окружении (не вызовет KeyError, если какого-то ключа пока нет)
@@ -57,6 +57,7 @@ class LLMWorker:
         self.db_users = db_users
         self.db_messages = db_messages
         self.mytelethon = mytelethon
+        self.queue_new_mess = queue_new_mess
         self.jumis_agent = None
 
 
@@ -199,6 +200,7 @@ class LLMWorker:
                 if 'db_messages' in sig.parameters: call_kwargs['db_messages'] = self.db_messages
                 if 'mytelethon' in sig.parameters: call_kwargs['mytelethon'] = self.mytelethon
                 if 'jumis_agent' in sig.parameters: call_kwargs['jumis_agent'] = self.jumis_agent
+                if 'queue_new_mess' in sig.parameters: call_kwargs['queue_new_mess'] = self.queue_new_mess
 
                 # Вызов в зависимости от типа функции (async/sync)
                 if inspect.iscoroutinefunction(func):

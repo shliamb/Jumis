@@ -28,42 +28,24 @@ AGENTS = {
             "- `write_fact`: Auto-run silently for long-term info/requests. Never claim saved without actual tool call.\n"
             "- `msg_search` / `msg_range`: Run ONLY on explicit Admin request. Never call autonomously.\n"
             "- `send_mess_peer`: Send message ONLY after Owner's explicit confirmation. Draft MUST be plain raw text: strictly NO emojis.\n\n"
-            #"- `send_mess_peer`: Send message ONLY after Owner's explicit confirmation. Draft MUST be written in natural human style: plain text or simple Telegram Markdown (bold/italic only). Strictly NO emojis, NO headers (#)."
-
-            # "[Subagent Reports]\n"
-            # "- Messages matching `[Incoming Message | Analysis by <name>]` are internal background reports for the Owner.\n"
-            # "- Action: Summarize the message for the Owner and suggest a response draft.\n"
-            # "- Approval: NEVER send messages to the peer without explicit Owner confirmation. Revise and re-confirm if edits are requested.\n"
-
-            # [Субагенты]
-            # - Сообщение вида `[Incoming Message | Analysis by <имя>]` — это отчёт субагента о входящем сообщении Владельцу.
-            # - Реакция: передай суть Владельцу и предложи вариант ответа.
-            # - Согласование: НИКОГДА не отправляй ответ собеседнику без прямого одобрения Владельца. При правках обновляй черновик и снова запрашивай подтверждение.
-
+            
         ),
         "tools": [
             # DATE
             "get_date",
 
             # CATEGORIES FACTS
-            # "get_categories_facts", # Для теста, ИИ и так знает категории из tools
             "add_category_facts",
 
             # FACTS
             "write_fact",
-            #"update_fact",
             "del_fact",
             "search_facts",
-            # "facts_by_cat",
-            # "facts_by_user",
 
             # CATEGORIES USERS
             "add_category_users",
-            # "get_categories_users",
 
             # USERS
-            # "get_users", Хитрит и получает сразу всех - не экономно сука..
-            # "get_user", Нахер не нужно, все есть в search_users даже по вектору..
             "update_user",
             "search_users",
 
@@ -73,8 +55,7 @@ AGENTS = {
 
             # SENDING MESSAGES
             "send_mess_peer",
-            "clear_inbox_notifs",
-            # "get_pending_queue" - на всякий случай функция есть, но она не нужна
+            "clear_inbox_notifs"
         ]
     },
 
@@ -127,27 +108,41 @@ AGENTS = {
     #         # • Пробелы: [Что требует решения Владельца]
 
     #     ),
-    #     "tools": [
-    #         # DATE
-    #         "get_date",
+        # "tools": [
+        #     # DATE
+        #     "get_date",
 
-    #         # FACTS
-    #         "write_fact",
-    #         "update_fact",
-    #         "search_facts",
+        #     # CATEGORIES FACTS
+        #     # "get_categories_facts", # Для теста, ИИ и так знает категории из tools
+        #     "add_category_facts",
 
-    #         # CATEGORIES USERS
-    #         "add_category_users",
+        #     # FACTS
+        #     "write_fact",
+        #     #"update_fact",
+        #     "del_fact",
+        #     "search_facts",
+        #     # "facts_by_cat",
+        #     # "facts_by_user",
 
-    #         # USERS
-    #         "get_user",
-    #         "update_user",
-    #         "search_users",
+        #     # CATEGORIES USERS
+        #     "add_category_users",
+        #     # "get_categories_users",
 
-    #         # Messages
-    #         "msg_search",
-    #         "msg_range"
-    #     ]
+        #     # USERS +
+        #     # "get_users", Хитрит и получает сразу всех - не экономно сука..
+        #     # "get_user", Нахер не нужно, все есть в search_users даже по вектору..
+        #     "update_user",
+        #     "search_users",
+
+        #     # Messages +
+        #     "msg_search",
+        #     "msg_range",
+
+        #     # SENDING MESSAGES +
+        #     "send_mess_peer",
+        #     "clear_inbox_notifs",
+        #     # "get_pending_queue" - на всякий случай функция есть, но она не нужна
+        # ]
     # }
 
 }

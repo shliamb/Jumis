@@ -5,7 +5,10 @@ logger = set_logger(name="db")
 from database import db
 
 
+
+
 class DBMessages():
+
     def __init__(self):
         self.db = db
 
@@ -132,6 +135,17 @@ class DBMessages():
                 return []
 
 
+    async def update_embedding(self, message_id: int, embedding: List[float]) -> bool:
+        """Обновление вектора сообщения."""
+        query = "UPDATE messages SET embedding = $1::vector, is_embedded = TRUE WHERE id = $2;"
+        try:
+            await self.db.execute(query, str(embedding), message_id)
+            return True
+        except Exception as e:
+            logger.error(f"[DBMessages] Ошибка обновления вектора id={message_id}: {e}")
+            return False
+
+
     # async def update_content(self, message_id: int, content: str) -> bool:
     #     # Хер знает на кой он нужен, позже удалить нахер..
     #     """Обновление текста сообщения (для воркера транскрибации)."""
@@ -142,14 +156,3 @@ class DBMessages():
     #     except Exception as e:
     #         logger.error(f"[DBMessages] Ошибка обновления текста id={message_id}: {e}")
     #         return False
-
-
-    async def update_embedding(self, message_id: int, embedding: List[float]) -> bool:
-        """Обновление вектора сообщения."""
-        query = "UPDATE messages SET embedding = $1::vector, is_embedded = TRUE WHERE id = $2;"
-        try:
-            await self.db.execute(query, str(embedding), message_id)
-            return True
-        except Exception as e:
-            logger.error(f"[DBMessages] Ошибка обновления вектора id={message_id}: {e}")
-            return False

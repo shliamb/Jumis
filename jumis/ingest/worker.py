@@ -126,31 +126,36 @@ class IngestionWorker:
             # Если пользователя нет - сохранит, если есть - ничего
             await self.db_users.add_user(new_user_data)
 
-        # 2. ADD MESSAGE (входящие + исходящие)
-        data_message = {
-            "chat_id": chat_id,
-            "sender_id": sender_id,
-            "recipient_id": chat_id,
-            "tg_msg_id": msg_info.get("tg_msg_id"),
-            "direction": direction,
-            "content": content,
-            "msg_type": msg_type,
-            "media_file_id": msg_info.get("media_file_id"),
-            "media_local_path": msg_info.get("media_local_path"),
-            "created_at": msg_info.get("created_at"),
-        }
+        # Типы, которые сохраняем в БД и векторизуем
+        white_type = ["voice", "text"]
 
         msg_db_id = None
-        msg_db_id = await self.db_messages.add_message(data_message)
-        if not msg_db_id:
-            logger.error(f"[Ingest] Не удалось сохранить сообщение для chat_id={chat_id}")
-            return
 
-        # 3. VECTORIZATION 
-        if content and not content.startswith("[") and msg_db_id:
-            task = asyncio.create_task(self._background_vectorize(message_id=msg_db_id, content=content))
-            self.background_tasks.add(task)
-            task.add_done_callback(self.background_tasks.discard)
+        # 2. ADD MESSAGE (входящие + исходящие только для реальных сообщений)
+        if msg_type in white_type:
+            data_message = {
+                "chat_id": chat_id,
+                "sender_id": sender_id,
+                "recipient_id": chat_id,
+                "tg_msg_id": msg_info.get("tg_msg_id"),
+                "direction": direction,
+                "content": content,
+                "msg_type": msg_type,
+                "media_file_id": msg_info.get("media_file_id"),
+                "media_local_path": msg_info.get("media_local_path"),
+                "created_at": msg_info.get("created_at"),
+            }
+
+            msg_db_id = await self.db_messages.add_message(data_message)
+            if not msg_db_id:
+                logger.error(f"[Ingest] Не удалось сохранить сообщение для chat_id={chat_id}")
+                return
+
+            # 3. VECTORIZATION 
+            if content and not content.startswith("[") and msg_db_id:
+                task = asyncio.create_task(self._background_vectorize(message_id=msg_db_id, content=content))
+                self.background_tasks.add(task)
+                task.add_done_callback(self.background_tasks.discard)
 
 
         # 4. CHECKING WHITE/BLACK LIST (пропускается для Избранного)

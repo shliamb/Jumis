@@ -1,10 +1,10 @@
 # jumis/llm/functions.py
-#from database.users import get_all_users, db_get_user, db_update_user
 import asyncio
 from typing import Any, Dict, List, Optional
 from vector import embedder
 from utils.common import sanitize_human_text
-from datetime import datetime
+from datetime import datetime, timezone
+from config import ADMIN_ID
 from logs.set_logger import set_logger
 logger = set_logger(name="llmfunc")
 import json
@@ -19,7 +19,6 @@ background_tasks = set()
 
 async def get_date():
     """ Получение даты """
-    from datetime import datetime
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
  
 
@@ -371,183 +370,99 @@ async def get_categories_users(db_users=None) -> str:
 
 
 
-async def get_users(db_users=None) -> str:
-    """Возвращает отформатированный список всех пользователей со всеми полями из БД для LLM."""
-    users: list[dict] = await db_users.get_all_users()
+# async def get_users(db_users=None) -> str:
+#     """Возвращает отформатированный список всех пользователей со всеми полями из БД для LLM."""
+#     users: list[dict] = await db_users.get_all_users()
 
-    if not users:
-        logger.info("No users found in database.")
-        return "No registered users found in the database."
+#     if not users:
+#         logger.info("No users found in database.")
+#         return "No registered users found in the database."
 
-    formatted_users = []
+#     formatted_users = []
     
-    for u in users:
-        user_id = u.get("id", "N/A")
+#     for u in users:
+#         user_id = u.get("id", "N/A")
         
-        # 1. Собираем активные флаги статуса
-        flags = []
-        if u.get("is_admin"):
-            flags.append("ADMIN")
-        if u.get("is_blocked"):
-            flags.append("BLOCKED")
-        if u.get("is_whitelisted"):
-            flags.append("WHITELISTED")
-        if u.get("is_bot"):
-            flags.append("BOT")
-        flags_str = f" [{', '.join(flags)}]" if flags else ""
+#         # 1. Собираем активные флаги статуса
+#         flags = []
+#         if u.get("is_admin"):
+#             flags.append("ADMIN")
+#         if u.get("is_blocked"):
+#             flags.append("BLOCKED")
+#         if u.get("is_whitelisted"):
+#             flags.append("WHITELISTED")
+#         if u.get("is_bot"):
+#             flags.append("BOT")
+#         flags_str = f" [{', '.join(flags)}]" if flags else ""
 
-        # 2. Дата регистрации без секунды/миллисекунд
-        created_at = u.get("created_at")
-        if isinstance(created_at, datetime):
-            date_str = created_at.strftime("%Y-%m-%d %H:%M")
-        elif created_at:
-            date_str = str(created_at)[:16]
-        else:
-            date_str = "no-date"
+#         # 2. Дата регистрации без секунды/миллисекунд
+#         created_at = u.get("created_at")
+#         if isinstance(created_at, datetime):
+#             date_str = created_at.strftime("%Y-%m-%d %H:%M")
+#         elif created_at:
+#             date_str = str(created_at)[:16]
+#         else:
+#             date_str = "no-date"
 
-        # Заголовок карточки пользователя
-        user_lines = [f"• User #{user_id}{flags_str} (registered: {date_str})"]
+#         # Заголовок карточки пользователя
+#         user_lines = [f"• User #{user_id}{flags_str} (registered: {date_str})"]
 
-        # 3. Идентификаторы и контакты
-        contacts = []
-        if tg_id := u.get("tg_id"):
-            contacts.append(f"TG ID: {tg_id}")
-        if username := u.get("username"):
-            contacts.append(f"@{username}")
-        if full_name := u.get("full_name"):
-            contacts.append(f"Name: {full_name}")
-        if phone := u.get("phone"):
-            contacts.append(f"Phone: {phone}")
+#         # 3. Идентификаторы и контакты
+#         contacts = []
+#         if tg_id := u.get("tg_id"):
+#             contacts.append(f"TG ID: {tg_id}")
+#         if username := u.get("username"):
+#             contacts.append(f"@{username}")
+#         if full_name := u.get("full_name"):
+#             contacts.append(f"Name: {full_name}")
+#         if phone := u.get("phone"):
+#             contacts.append(f"Phone: {phone}")
         
-        if contacts:
-            user_lines.append(f"  - Contacts: {' | '.join(contacts)}")
+#         if contacts:
+#             user_lines.append(f"  - Contacts: {' | '.join(contacts)}")
 
-        # 4. Категория, язык и модели
-        sys_info = []
-        if category := u.get("category"):
-            sys_info.append(f"Category: {category}")
-        if lang := u.get("lang_code"):
-            sys_info.append(f"Lang: {lang}")
-        if model_def := u.get("model_default"):
-            sys_info.append(f"Model: {model_def}")
-        if model_cheap := u.get("model_cheap"):
-            sys_info.append(f"Model Cheap: {model_cheap}")
-        if model_smart := u.get("model_smart"):
-            sys_info.append(f"Model Smart: {model_smart}")
+#         # 4. Категория, язык и модели
+#         sys_info = []
+#         if category := u.get("category"):
+#             sys_info.append(f"Category: {category}")
+#         if lang := u.get("lang_code"):
+#             sys_info.append(f"Lang: {lang}")
+#         if model_def := u.get("model_default"):
+#             sys_info.append(f"Model: {model_def}")
+#         if model_cheap := u.get("model_cheap"):
+#             sys_info.append(f"Model Cheap: {model_cheap}")
+#         if model_smart := u.get("model_smart"):
+#             sys_info.append(f"Model Smart: {model_smart}")
 
-        if sys_info:
-            user_lines.append(f"  - System: {' | '.join(sys_info)}")
+#         if sys_info:
+#             user_lines.append(f"  - System: {' | '.join(sys_info)}")
 
-        # 5. Ручные заметки и ИИ-саммари
-        if comment := u.get("comment"):
-            user_lines.append(f"  - Comment: {comment}")
-        if summary := u.get("summary"):
-            user_lines.append(f"  - AI Summary: {summary}")
+#         # 5. Ручные заметки и ИИ-саммари
+#         if comment := u.get("comment"):
+#             user_lines.append(f"  - Comment: {comment}")
+#         if summary := u.get("summary"):
+#             user_lines.append(f"  - AI Summary: {summary}")
 
-        formatted_users.append("\n".join(user_lines))
+#         formatted_users.append("\n".join(user_lines))
 
-    header = f"=== Registered Users ({len(users)}) ==="
-    return f"{header}\n\n" + "\n\n".join(formatted_users)
-
-
+#     header = f"=== Registered Users ({len(users)}) ==="
+#     return f"{header}\n\n" + "\n\n".join(formatted_users)
 
 
 
-async def get_user(
-    user_id: int | None = None,
-    tg_id: int | None = None,
-    username: str | None = None,
-    db_users=None,
-    **kwargs  # Защита от лишних аргументов LLM
-) -> str:
-    """Поиск профиля пользователя по user_id (БД), tg_id или username."""
-    if not db_users:
-        return "Error: Database service 'db_users' is not available."
-
-    if not user_id and not tg_id and not username:
-        logger.warning("Attempted to call get_user without any identifier.")
-        return "Error: Provide at least one identifier (user_id, tg_id, or username)."
-
-    # Запрашиваем пользователя через единую функцию БД
-    data_user = await db_users.db_get_user(user_id=user_id, tg_id=tg_id, username=username)
-
-    if not data_user:
-        target = f"id={user_id}" if user_id else (f"tg_id={tg_id}" if tg_id else f"username='{username}'")
-        logger.info("User not found for %s", target)
-        return f"User not found ({target})."
-
-    # Извлечение полей
-    u_id = data_user.get("id")
-    u_tg_id = data_user.get("tg_id") or "N/A"
-    u_uname = data_user.get("username")
-    uname_str = f"@{u_uname}" if u_uname else "no username"
-
-    # Флаги статуса
-    flags = []
-    if data_user.get("is_admin"):
-        flags.append("ADMIN")
-    if data_user.get("is_blocked"):
-        flags.append("BLOCKED")
-    if data_user.get("is_whitelisted"):
-        flags.append("WHITELISTED")
-    if data_user.get("is_bot"):
-        flags.append("BOT")
-    
-    flags_str = f" [{', '.join(flags)}]" if flags else ""
-
-    # Дата регистрации
-    created_at = data_user.get("created_at")
-    if isinstance(created_at, datetime):
-        date_str = created_at.strftime("%Y-%m-%d %H:%M")
-    elif created_at:
-        date_str = str(created_at)[:16]
-    else:
-        date_str = "no-date"
-
-    # Формирование ответа
-    lines = [
-        f"=== User Profile #{u_id}{flags_str} ===",
-        f"• TG ID: {u_tg_id} | Username: {uname_str}"
-    ]
-
-    if full_name := data_user.get("full_name"):
-        lines.append(f"• Name: {full_name}")
-    if phone := data_user.get("phone"):
-        lines.append(f"• Phone: {phone}")
-    if category := data_user.get("category"):
-        lines.append(f"• Category: {category}")
-    if lang := data_user.get("lang_code"):
-        lines.append(f"• Lang: {lang}")
-    if aliases := data_user.get("aliases"):
-        lines.append(f"• Aliases: {aliases}")
-    if comment := data_user.get("comment"):
-        lines.append(f"• Comment: {comment}")
-    if summary := data_user.get("summary"):
-        lines.append(f"• AI Summary: {summary}")
-
-    # Назначенные модели
-    models = []
-    if m_def := data_user.get("model_default"):
-        models.append(f"default={m_def}")
-    if m_cheap := data_user.get("model_cheap"):
-        models.append(f"cheap={m_cheap}")
-    if m_smart := data_user.get("model_smart"):
-        models.append(f"smart={m_smart}")
-    if models:
-        lines.append(f"• Models: {', '.join(models)}")
-
-    lines.append(f"• Registered: {date_str}")
-
-    return "\n".join(lines)
 
 
 # async def get_user(
 #     user_id: int | None = None,
 #     tg_id: int | None = None,
 #     username: str | None = None,
-#     db_users=None
+#     db_users=None,
+#     **kwargs  # Защита от лишних аргументов LLM
 # ) -> str:
 #     """Поиск профиля пользователя по user_id (БД), tg_id или username."""
+#     if not db_users:
+#         return "Error: Database service 'db_users' is not available."
+
 #     if not user_id and not tg_id and not username:
 #         logger.warning("Attempted to call get_user without any identifier.")
 #         return "Error: Provide at least one identifier (user_id, tg_id, or username)."
@@ -602,16 +517,28 @@ async def get_user(
 #         lines.append(f"• Category: {category}")
 #     if lang := data_user.get("lang_code"):
 #         lines.append(f"• Lang: {lang}")
-#     if model_default := data_user.get("model_default"):
-#         lines.append(f"• Model: {model_default}")
+#     if aliases := data_user.get("aliases"):
+#         lines.append(f"• Aliases: {aliases}")
 #     if comment := data_user.get("comment"):
 #         lines.append(f"• Comment: {comment}")
 #     if summary := data_user.get("summary"):
 #         lines.append(f"• AI Summary: {summary}")
 
+#     # Назначенные модели
+#     models = []
+#     if m_def := data_user.get("model_default"):
+#         models.append(f"default={m_def}")
+#     if m_cheap := data_user.get("model_cheap"):
+#         models.append(f"cheap={m_cheap}")
+#     if m_smart := data_user.get("model_smart"):
+#         models.append(f"smart={m_smart}")
+#     if models:
+#         lines.append(f"• Models: {', '.join(models)}")
+
 #     lines.append(f"• Registered: {date_str}")
 
 #     return "\n".join(lines)
+
 
 
 
@@ -620,10 +547,13 @@ async def update_user(
     tg_id: int | None = None,
     target_username: str | None = None,
     db_users=None,
+    embedder=None,
     **kwargs
 ) -> str:
     """Обновление профиля пользователя по одному из идентификаторов."""
-    
+    if not db_users:
+        return "Error: Database service 'db_users' is not available."
+
     user_data = {}
     target_label = ""
 
@@ -642,43 +572,130 @@ async def update_user(
         logger.warning("Attempted to call update_user without any target identifier.")
         return "Error: Provide at least one identifier (user_id, tg_id, or target_username)."
 
-    # 2. Исключаем ключи-идентификаторы из kwargs, чтобы AI не изменил случайно ключевые ID
-    IDENTIFIER_KEYS = {"user_id", "tg_id", "target_username", "id"}
+    # 2. Исключаем системные сервисы и идентификаторы из списка обновляемых полей
+    EXCLUDE_KEYS = {"user_id", "tg_id", "target_username", "id", "embedder"}
     
-    # Собираем только валидные поля для изменения
     update_fields = {}
     for key, val in kwargs.items():
-        if key in IDENTIFIER_KEYS or val is None:
+        if key in EXCLUDE_KEYS or val is None:
             continue
         
-        # Если меняется логин пользователя (колонка username) — зачищаем @
+        # Если меняется логин пользователя — зачищаем @
         if key == "username" and isinstance(val, str):
             val = val.strip().lstrip("@")
 
-        # В схеме разделяем - user_category, в базе category
+        # В схеме user_category, в базе category
         if key == "user_category":
             key = "category"
             
         update_fields[key] = val
 
-    # 3. Проверяем, передал ли AI хоть одно поле для изменения
+    # 3. Автоматический расчет aliases_vector при изменении aliases
+    if "aliases" in update_fields:
+        aliases_text = update_fields["aliases"]
+        if aliases_text and str(aliases_text).strip():
+            emb_service = embedder or kwargs.get("embedder") or globals().get("embedder")
+            if emb_service:
+                try:
+                    vector = await embedder.get_embedding(str(aliases_text).strip())
+                    if vector:
+                        update_fields["aliases_vector"] = vector
+                except Exception as e:
+                    logger.error(f"[update_user] Ошибка генерации эмбеддинга для aliases: {e}")
+        else:
+            # Если алиасы занулили или очистили — сбрасываем и вектор
+            update_fields["aliases_vector"] = None
+
+    # 4. Проверяем, передал ли AI хоть одно поле для изменения
     if not update_fields:
         return f"Error: No fields provided to update for user ({target_label})."
 
-    # Объединяем идентификатор и редактируемые поля в один словарь для db_update_user
+    # Объединяем идентификатор и редактируемые поля
     user_data.update(update_fields)
 
-    # 4. Вызываем функцию БД (db_update_user возвращает True / False)
+    # 5. Вызываем метод БД
     success = await db_users.db_update_user(user_data)
 
     if not success:
         logger.error("Failed to update user %s", target_label)
         return f"Error: User '{target_label}' not found or database update failed."
 
-    # 5. Возвращаем чёткое подтверждение для LLM
-    changed_keys = ", ".join(update_fields.keys())
+    # 6. Подтверждение для LLM (скрываем внутреннее векторное поле из ответа)
+    changed_keys = ", ".join([k for k in update_fields.keys() if k != "aliases_vector"])
     logger.info("Successfully updated User (%s) fields: %s", target_label, changed_keys)
     return f"Success: User ({target_label}) updated. Fields changed: [{changed_keys}]."
+
+
+
+
+# async def update_user(
+#     user_id: int | None = None,
+#     tg_id: int | None = None,
+#     target_username: str | None = None,
+#     embedder=None,
+#     db_users=None,
+#     **kwargs
+# ) -> str:
+#     """Обновление профиля пользователя по одному из идентификаторов."""
+
+#     if not db_users:
+#         return "Error: Database service 'db_users' is not available."
+    
+#     user_data = {}
+#     target_label = ""
+
+#     # 1. Выбираем СТРОГО один приоритетный идентификатор для поиска
+#     if user_id:
+#         user_data["id"] = user_id
+#         target_label = f"ID #{user_id}"
+#     elif tg_id:
+#         user_data["tg_id"] = tg_id
+#         target_label = f"TG ID #{tg_id}"
+#     elif target_username:
+#         clean_target = target_username.strip().lstrip("@")
+#         user_data["username"] = clean_target
+#         target_label = f"@{clean_target}"
+#     else:
+#         logger.warning("Attempted to call update_user without any target identifier.")
+#         return "Error: Provide at least one identifier (user_id, tg_id, or target_username)."
+
+#     # 2. Исключаем ключи-идентификаторы из kwargs, чтобы AI не изменил случайно ключевые ID
+#     IDENTIFIER_KEYS = {"user_id", "tg_id", "target_username", "id"}
+    
+#     # Собираем только валидные поля для изменения
+#     update_fields = {}
+#     for key, val in kwargs.items():
+#         if key in IDENTIFIER_KEYS or val is None:
+#             continue
+        
+#         # Если меняется логин пользователя (колонка username) — зачищаем @
+#         if key == "username" and isinstance(val, str):
+#             val = val.strip().lstrip("@")
+
+#         # В схеме разделяем - user_category, в базе category
+#         if key == "user_category":
+#             key = "category"
+            
+#         update_fields[key] = val
+
+#     # 3. Проверяем, передал ли AI хоть одно поле для изменения
+#     if not update_fields:
+#         return f"Error: No fields provided to update for user ({target_label})."
+
+#     # Объединяем идентификатор и редактируемые поля в один словарь для db_update_user
+#     user_data.update(update_fields)
+
+#     # 4. Вызываем функцию БД (db_update_user возвращает True / False)
+#     success = await db_users.db_update_user(user_data)
+
+#     if not success:
+#         logger.error("Failed to update user %s", target_label)
+#         return f"Error: User '{target_label}' not found or database update failed."
+
+#     # 5. Возвращаем чёткое подтверждение для LLM
+#     changed_keys = ", ".join(update_fields.keys())
+#     logger.info("Successfully updated User (%s) fields: %s", target_label, changed_keys)
+#     return f"Success: User ({target_label}) updated. Fields changed: [{changed_keys}]."
 
 
 
@@ -687,49 +704,90 @@ async def search_users(
     user_id: int = None,
     tg_id: int = None,
     category: str = None,
-    limit: int = 10,
+    limit: int = 5,
     db_users=None,
+    embedder=None, # Заебал...
     **kwargs  # Защита от лишних аргументов LLM
 ) -> str:
-    """Инструмент поиска пользователей"""
+    """Инструмент поиска пользователей с выводом всех полей профиля (кроме эмбеддинга)."""
     if not db_users:
         return "Error: Users service is unavailable."
 
-    search_data = {
-        "query": query,
-        "user_id": user_id,
-        "tg_id": tg_id,
-        "category": category,
-        "limit": limit or 10
-    }
+    emb_service = embedder or kwargs.get("embedder") or globals().get("embedder")
 
-    users = await db_users.search_users(search_data)
+    vector = None
+    if query and str(query).strip():
+        if not emb_service:
+            logger.warning("[search_users] Embedder is not available for semantic query.")
+            return "Error: Embedding service is not configured for text search."
+
+        try:
+            vector = await emb_service.get_embedding(str(query).strip())
+        except Exception as e:
+            logger.error("[search_users] Ошибка получения эмбеддинга: %s", e)
+
+    # Поиск в БД по всем переданным фильтрам
+    users = await db_users.search_users(
+        query=query,
+        vector=vector,
+        user_id=user_id,
+        tg_id=tg_id,
+        category=category,
+        limit=limit
+    )
 
     if not users:
         return "No users found matching the specified search criteria."
 
-    formatted_lines = []
+    # Форматирование полной информации обо всех полях (без aliases_vector)
+    formatted_blocks = []
     for u in users:
         uid = u.get("id", "N/A")
         utg = u.get("tg_id") or "N/A"
         username = f"@{u['username']}" if u.get("username") else "no-username"
-        name = u.get("full_name") or "Unnamed"
+        name = u.get("full_name") or "N/A"
+        phone = u.get("phone") or "N/A"
         cat = u.get("category", "not_defined")
+        lang = u.get("lang_code") or "ru"
         
+        # Флаги статуса
         flags = []
         if u.get("is_admin"): flags.append("ADMIN")
         if u.get("is_blocked"): flags.append("BLOCKED")
-        if u.get("is_whitelisted"): flags.append("WHITE-LIST")
-        flags_str = f" [{', '.join(flags)}]" if flags else ""
+        if u.get("is_whitelisted"): flags.append("WHITELISTED")
+        if u.get("is_bot"): flags.append("BOT")
+        flags_str = ", ".join(flags) if flags else "regular"
 
-        comment_str = f" | Note: {u['comment']}" if u.get("comment") else ""
+        # Назначенные модели
+        models = []
+        if m_def := u.get("model_default"): models.append(f"default={m_def}")
+        if m_cheap := u.get("model_cheap"): models.append(f"cheap={m_cheap}")
+        if m_smart := u.get("model_smart"): models.append(f"smart={m_smart}")
+        models_str = ", ".join(models) if models else "default"
 
-        formatted_lines.append(
-            f"• [ID: {uid} | TG: {utg}] {name} ({username}){flags_str} | Category: '{cat}'{comment_str}"
-        )
+        # Форматирование дат
+        c_at = u.get("created_at")
+        c_str = c_at.strftime("%Y-%m-%d %H:%M") if hasattr(c_at, "strftime") else str(c_at or "N/A")
 
-    header = f"=== Found Users ({len(formatted_lines)}) ==="
-    return f"{header}\n" + "\n".join(formatted_lines)
+        lines = [
+            f"• [User #{uid} | TG: {utg} | Username: {username}]",
+            f"  Name: {name} | Phone: {phone} | Category: '{cat}' | Lang: {lang}",
+            f"  Flags: [{flags_str}] | Models: [{models_str}]"
+        ]
+
+        if u.get("aliases"):
+            lines.append(f"  Aliases: {u['aliases']}")
+        if u.get("comment"):
+            lines.append(f"  Comment: {u['comment']}")
+        if u.get("summary"):
+            lines.append(f"  AI Summary: {u['summary']}")
+
+        lines.append(f"  Registered: {c_str}")
+
+        formatted_blocks.append("\n".join(lines))
+
+    header = f"=== Found Users ({len(formatted_blocks)}) ==="
+    return f"{header}\n\n" + "\n\n".join(formatted_blocks)
 
 
 
@@ -900,14 +958,12 @@ async def msg_range(
 
 ###### SEND MESSAGES TELETHONE #####
 
-async def send_mess_peer(peer_id: int, text_mess: str, mytelethon) -> str:
+
+
+async def send_mess_peer(peer_id: int, text_mess: str, mytelethon, queue_new_mess) -> str:
     """
-    Отправляет прямое сообщение пользователю Telegram через Telethon от имени Владельца.
-    
-    :param peer_id: Telegram ID получателя
-    :param text_mess: Согласованный текст сообщения
-    :param mytelethon: Клиент Telethon
-    :return: Понятный статус выполнения для LLM
+    Отправляет прямое сообщение пользователю Telegram через Telethon от имени Владельца
+    и напрямую прокидывает событие в очередь для сброса виджета JumisAgent.
     """
     if not peer_id or not text_mess or not text_mess.strip():
         return "Error: Invalid arguments. Both 'peer_id' and non-empty 'text_mess' are required."
@@ -925,23 +981,116 @@ async def send_mess_peer(peer_id: int, text_mess: str, mytelethon) -> str:
             username=None
         )
 
+        # 1. Проверка на ошибки отправки (если отвалилось — в очередь НЕ кладем)
         if answer is None:
             logger.error(f"[send_mess_peer] Failed to send message to {peer_id}: returned None")
             return f"Error: Message to {peer_id} was not sent (service returned None)."
-
-        if isinstance(answer, int):
-            logger.info(f"[send_mess_peer] Message sent to {peer_id}")
-            return f"Success: Message successfully sent to peer_id {peer_id}."
 
         if isinstance(answer, str):
             logger.error(f"[send_mess_peer] Telethon error for {peer_id}: {answer}")
             return f"Error sending message to {peer_id}: {answer}"
 
-        return f"Success: Message sent to {peer_id}." # ))))
+        # 2. Успешно отправлено — извлекаем tg_msg_id и дату
+        if isinstance(answer, int):
+            tg_msg_id = answer
+            created_at = datetime.now(timezone.utc)
+        else:
+            tg_msg_id = getattr(answer, "id", None)
+            created_at = getattr(answer, "date", datetime.now(timezone.utc))
+
+        # 3. Формируем таск для воркера/JumisAgent
+        task_payload = {
+            "chat_id": peer_id,
+            "sender_id": ADMIN_ID,
+            "recipient_id": peer_id,
+            "tg_msg_id": tg_msg_id,
+            "msg_db_id": None,
+            "username": "admin",
+            "content": clean_text,
+            "direction": "outbound_owner",
+            "msg_type": "text",
+            "created_at": created_at
+        }
+
+        await queue_new_mess.put(task_payload)
+        logger.info(f"[send_mess_peer] Message successfully sent to {peer_id} (tg_msg_id={tg_msg_id}) and pushed to queue.")
+
+        return f"Success: Message successfully sent to peer_id {peer_id}."
 
     except Exception as e:
         logger.error(f"[send_mess_peer] Unexpected error for {peer_id}: {e}", exc_info=True)
         return f"Fatal error: Exception occurred while sending message: {type(e).__name__} - {str(e)}"
+
+
+
+
+
+
+# async def send_mess_peer(peer_id: int, text_mess: str, mytelethon, queue_new_mess) -> str:
+#     """
+#     Отправляет прямое сообщение пользователю Telegram через Telethon от имени Владельца
+#     и напрямую прокидывает событие в очередь для сброса виджета JumisAgent.
+#     :param peer_id: Telegram ID получателя
+#     :param text_mess: Согласованный текст сообщения
+#     :param mytelethon: Клиент Telethon
+#     :return: Понятный статус выполнения для LLM
+#     """
+#     if not peer_id or not text_mess or not text_mess.strip():
+#         return "Error: Invalid arguments. Both 'peer_id' and non-empty 'text_mess' are required."
+
+#     # Жёсткая зачистка ИИ-артефактов перед отправкой
+#     clean_text = sanitize_human_text(text_mess)
+
+#     if not clean_text:
+#         return "Error: Message became empty after cleaning emojis and tags."
+
+#     try:
+#         answer = await mytelethon.send_message(
+#             message_text=clean_text,
+#             telegram_id=peer_id,
+#             username=None
+#         )
+
+#         if answer is None:
+#             logger.error(f"[send_mess_peer] Failed to send message to {peer_id}: returned None")
+#             return f"Error: Message to {peer_id} was not sent (service returned None)."
+
+#         ####### 
+
+#         task_payload = {
+#             "chat_id": peer_id,
+#             "sender_id": ADMIN_ID,
+#             "recipient_id": peer_id,
+
+#             "tg_msg_id": ...,
+#             "msg_db_id": None,
+
+#             "username": "admin",
+#             "content": clean_text,
+#             "direction": "outbound_owner",
+#             "msg_type": "text",
+#             "created_at": ....
+#         }
+
+#         await queue_new_mess.put(task_payload)
+
+#         ######
+
+#         if isinstance(answer, int):
+#             logger.info(f"[send_mess_peer] Message sent to {peer_id}")
+#             return f"Success: Message successfully sent to peer_id {peer_id}."
+
+#         if isinstance(answer, str):
+#             logger.error(f"[send_mess_peer] Telethon error for {peer_id}: {answer}")
+#             return f"Error sending message to {peer_id}: {answer}"
+
+#         return f"Success: Message sent to {peer_id}." # ))))
+
+#     except Exception as e:
+#         logger.error(f"[send_mess_peer] Unexpected error for {peer_id}: {e}", exc_info=True)
+#         return f"Fatal error: Exception occurred while sending message: {type(e).__name__} - {str(e)}"
+
+
 
 
 
@@ -1100,80 +1249,6 @@ FUNCTIONS = {
         }
     },
 
-    "get_users": {
-        "description": "Retrieves a list of all registered users and clients in the system.",
-        "function": get_users,
-        "schema": {
-            "type": "object",
-            "properties": {},
-            "required": []
-        }
-    },
-
-    "get_user": {
-        "description": "Retrieves user profile details by internal ID, Telegram ID, username, or semantically searches users by aliases/traits.",
-        "function": get_user,
-        "schema": {
-            "type": "object",
-            "properties": {
-                "user_id": {
-                    "type": "integer",
-                    "description": "Internal database primary key user ID."
-                },
-                "tg_id": {
-                    "type": "integer",
-                    "description": "Telegram user ID."
-                },
-                "username": {
-                    "type": "string",
-                    "description": "Telegram username (e.g. 'john_doe')."
-                }
-            },
-            "required": []
-        }
-    },
-
-    "update_user": {
-        "description": "Updates profile attributes, notes, or flags for a user in the database.",
-        "function": update_user,
-        "schema": {
-            "type": "object",
-            "properties": {
-                # --- Идентификаторы (нужен хотя бы один) ---
-                "user_id": {
-                    "type": "integer", 
-                    "description": "Internal database user ID (PK)."
-                },
-                "tg_id": {
-                    "type": "integer", 
-                    "description": "Telegram user ID."
-                },
-                "target_username": {
-                    "type": "string", 
-                    "description": "Telegram username to search user by (e.g. 'john_doe')."
-                },
-
-                # --- Редактируемые поля ---
-                "full_name": {"type": "string", "description": "Full name of the user."},
-                "phone": {"type": "string", "description": "Phone number."},
-                "user_category": {"type": "string", "description": "Optional category name to filter search results."}, # Динамический enum подставится автоматически через get_tools_for_agent
-                "comment": {"type": "string", "description": "Personal manual note about the user."},
-                "summary": {"type": "string", "description": "AI-generated summary of past dialogue context."},
-                
-                # --- Флаги доступа ---
-                "is_admin": {"type": "boolean", "description": "Set admin status."},
-                "is_blocked": {"type": "boolean", "description": "Block or unblock user."},
-                "is_whitelisted": {"type": "boolean", "description": "Priority queue whitelist status."},
-                
-                # --- Настройки ---
-                "lang_code": {"type": "string", "description": "Language code (e.g. 'ru', 'en')."},
-                "model_default": {"type": "string", "description": "Default model name (e.g. 'deepseek/deepseek-v4-flash')."}
-            },
-            "required": []
-        }
-    },
-
-
     "get_categories_users": {
         "description": "Retrieve a list of all available user (client) categories and their descriptions.",
         "function": get_categories_users,
@@ -1203,31 +1278,74 @@ FUNCTIONS = {
         }
     },
 
+    "update_user": {
+        "description": "Updates profile attributes, notes, traits, or settings for a user in the database.",
+        "function": update_user,
+        "schema": {
+            "type": "object",
+            "properties": {
+                # --- Идентификаторы (нужен хотя бы один) ---
+                "user_id": {
+                    "type": "integer", 
+                    "description": "Internal database user ID (PK)."
+                },
+                "tg_id": {
+                    "type": "integer", 
+                    "description": "Telegram user ID."
+                },
+                "target_username": {
+                    "type": "string", 
+                    "description": "Telegram username to search user by (e.g. 'john_doe')."
+                },
+
+                # --- Редактируемые поля ---
+                "full_name": {"type": "string", "description": "Full name of the user."},
+                "phone": {"type": "string", "description": "Phone number."},
+                "user_category": {"type": "string", "description": "Optional category name to group users."},
+                "comment": {"type": "string", "description": "Personal manual note about the user."},
+                "summary": {"type": "string", "description": "AI-generated summary of past dialogue context."},
+                "aliases": {"type": "string", "description": "Comma-separated search traits, keywords, or aliases for vector index (e.g. 'Петя, электрик, младший брат')."},
+                
+                # --- Флаги доступа ---
+                "is_admin": {"type": "boolean", "description": "Set admin status."},
+                "is_blocked": {"type": "boolean", "description": "Block or unblock user."},
+                "is_whitelisted": {"type": "boolean", "description": "Priority queue whitelist status."},
+                
+                # --- Настройки и модели ---
+                "lang_code": {"type": "string", "description": "Language code (e.g. 'ru', 'en')."},
+                "model_default": {"type": "string", "description": "Default model name (e.g. 'deepseek/deepseek-v4-flash')."},
+                "model_cheap": {"type": "string", "description": "Cheap model identifier for lightweight tasks."},
+                "model_smart": {"type": "string", "description": "Smart model identifier for complex reasoning."}
+            },
+            "required": []
+        }
+    },
+
     "search_users": {
-        "description": "Search for users/clients in the database by ID, Telegram ID, name/username search query, or category.",
+        "description": "Search users in the database by exact ID, Telegram ID, category, or semantic query (username, full name, notes, or aliases/traits).",
         "function": search_users,
         "schema": {
             "type": "object",
             "properties": {
                 "query": {
                     "type": "string",
-                    "description": "Search query to match against username, first name, last name, or notes."
+                    "description": "Search text or phrase to match against username, full name, comments, or aliases/traits."
                 },
                 "user_id": {
                     "type": "integer",
-                    "description": "Exact internal database user ID."
+                    "description": "Exact internal database primary key user ID."
                 },
                 "tg_id": {
                     "type": "integer",
-                    "description": "Exact Telegram user ID (tg_id)."
+                    "description": "Exact Telegram user ID."
                 },
                 "category": {
                     "type": "string",
-                    "description": "Filter users by specific user category."
+                    "description": "Filter users by specific category name."
                 },
                 "limit": {
                     "type": "integer",
-                    "description": "Maximum number of results to return (default is 5)."
+                    "description": "Maximum number of results to return (default: 5)."
                 }
             },
             "required": []
@@ -1321,7 +1439,38 @@ FUNCTIONS = {
 
 
 
+    # "get_users": {
+    #     "description": "Retrieves a list of all registered users and clients in the system.",
+    #     "function": get_users,
+    #     "schema": {
+    #         "type": "object",
+    #         "properties": {},
+    #         "required": []
+    #     }
+    # },
 
+    # "get_user": {
+    #     "description": "Retrieves user profile details by internal ID, Telegram ID, username, or semantically searches users by aliases/traits.",
+    #     "function": get_user,
+    #     "schema": {
+    #         "type": "object",
+    #         "properties": {
+    #             "user_id": {
+    #                 "type": "integer",
+    #                 "description": "Internal database primary key user ID."
+    #             },
+    #             "tg_id": {
+    #                 "type": "integer",
+    #                 "description": "Telegram user ID."
+    #             },
+    #             "username": {
+    #                 "type": "string",
+    #                 "description": "Telegram username (e.g. 'john_doe')."
+    #             }
+    #         },
+    #         "required": []
+    #     }
+    # },
 
 
 
