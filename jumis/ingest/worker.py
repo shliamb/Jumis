@@ -76,9 +76,10 @@ class IngestionWorker:
         msg_info = data.get("message", {})
         user_info = data.get("user", {})
         
-        chat_id = msg_info.get("chat_id")
+        chat_id = msg_info.get("chat_id", "unknown")
         recipient_id = chat_id
         sender_id = user_info.get("tg_id")
+        tg_msg_id = msg_info.get("tg_msg_id")
 
         if not chat_id or not sender_id:
             logger.warning(f"[Ingest] Пропущено сообщение: отсутствует chat_id ({chat_id}) или tg_id ({sender_id}).")
@@ -137,7 +138,7 @@ class IngestionWorker:
                 "chat_id": chat_id,
                 "sender_id": sender_id,
                 "recipient_id": chat_id,
-                "tg_msg_id": msg_info.get("tg_msg_id"),
+                "tg_msg_id": tg_msg_id,
                 "direction": direction,
                 "content": content,
                 "msg_type": msg_type,
@@ -175,7 +176,7 @@ class IngestionWorker:
             "sender_id": sender_id,
             "recipient_id": recipient_id,
 
-            "tg_msg_id": msg_info.get("tg_msg_id"),
+            "tg_msg_id": tg_msg_id,
             "msg_db_id": msg_db_id,
 
             "username": username,
@@ -185,11 +186,18 @@ class IngestionWorker:
             "created_at": msg_info.get("created_at")
         }
 
+        # Формируем читаемый и уникальный ID для логов
+        if msg_db_id:
+            msg_label = f"db:{msg_db_id}"
+        elif tg_msg_id:
+            msg_label = f"tg:{tg_msg_id} [{msg_type}]"
+        else:
+            msg_label = f"chat:{chat_id}"
+        
         # В очередь передаем, далее вылавливаем в jumis/jumis_agent/jumis_agent.py
         await self.queue_new_mess.put(task_payload)
-        logger.info(f"[IngestWorker] Сообщение [{msg_db_id}] передано в queue_new_mess")
+        logger.info(f"[IngestWorker] Сообщение [{msg_label}] (chat_id={chat_id}, type={msg_type}) передано в queue_new_mess")
 
-        logger.info(f"💾 [Ingest] Сообщение id={msg_db_id} (chat_id={chat_id}, type={msg_type}) успешно обработано.")
 
 
 

@@ -27,7 +27,7 @@ AGENTS = {
             "[TOOL EXECUTION RULES]\n"
             "- `write_fact`: Auto-run silently for long-term info/requests. Never claim saved without actual tool call.\n"
             "- `msg_search` / `msg_range`: Run ONLY on explicit Admin request. Never call autonomously.\n"
-            "- `send_mess_peer`: Send message ONLY after Owner's explicit confirmation. Draft MUST be plain raw text: strictly NO emojis.\n\n"
+            "- `send_mess_peer`: FORBIDDEN without prior approval. Step 1: Output draft (plain text, no emojis/markdown) + ask confirmation. Step 2: Call tool ONLY on explicit user confirmation in next turn."
             
         ),
         "tools": [

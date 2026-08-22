@@ -864,33 +864,59 @@ class JumisAgent:
 
 
     async def run_queue_worker(self):
-            """ Внутренний цикл ожидания сообщений входящие + исходящие Телеграмм """
-            logger.info("[JumisAgent] Запущен фоновый слушатель очереди сообщений")
-            while True:
-                try:
-                    # Ждем появления сообщения в очереди
-                    task_data = await self.queue_new_mess.get()
-                    msg_id = task_data.get("msg_db_id", "unknown")
-                    
-                    # ЛОГ 1: Поймали из очереди
-                    logger.info(f"[JumisAgent Worker] Взял из очереди сообщение: {msg_id}")
+        """ Внутренний цикл ожидания сообщений входящие + исходящие Телеграмм """
+        logger.info("[JumisAgent] Запущен фоновый слушатель очереди сообщений")
+        MAX_RETRIES = 3
 
-                    # Оборачиваем в таймаут 10 секунд! 
-                    # Если Telegram API зависнет, воркер не умрет, а выбросит TimeoutError
-                    await asyncio.wait_for(self.message_processing(task_data), timeout=10.0)
+        while True:
+            try:
+                # Ждем появления сообщения в очереди
+                task_data = await self.queue_new_mess.get()
+                msg_db_id = task_data.get("msg_db_id", "unknown")
+                tg_msg_id = task_data.get("tg_msg_id")
+                msg_type = task_data.get("msg_type", "msg")
+                retries = task_data.get("retry_count", 0)
 
-                    # ЛОГ 2: Успешно обработали
-                    logger.info(f"[JumisAgent Worker] Успешно обработал сообщение: {msg_id}")
+                # Формируем читаемый и уникальный ID для логов
+                if msg_db_id:
+                    msg_label = f"db:{msg_db_id}"
+                elif tg_msg_id:
+                    msg_label = f"tg:{tg_msg_id} [{msg_type}]"
+                else:
+                    msg_label = f"chat:{task_data.get('chat_id', 'unknown')}"
+                
+                logger.info(f"[JumisAgent Worker] Взял из очереди сообщение: {msg_label} (попытка {retries + 1})")
+                                
+                # Оборачиваем в таймаут 10 секунд
+                await asyncio.wait_for(self.message_processing(task_data), timeout=10.0)
 
-                except asyncio.TimeoutError:
-                    logger.error(f"💥 [JumisAgent Worker] ТАЙМАУТ! Зависла отправка сообщения {msg_id} в Telegram API.")
-                except asyncio.CancelledError:
-                    break
-                except Exception as e:
-                    logger.error(f"💥 [JumisAgent Worker] Критическая ошибка обработки: {e}", exc_info=True)
-                    await asyncio.sleep(1)
-                finally:
-                    self.queue_new_mess.task_done()
+                logger.info(f"[JumisAgent Worker] Успешно обработал сообщение: {msg_label}")
+
+            except asyncio.TimeoutError:
+                retries = task_data.get("retry_count", 0) + 1
+                task_data["retry_count"] = retries
+
+                if retries < MAX_RETRIES:
+                    logger.error(
+                        f"⚠️ [JumisAgent Worker] ТАЙМАУТ на сообщении {msg_label}! "
+                        f"Повторная попытка {retries}/{MAX_RETRIES} через 2 сек..."
+                    )
+                    await asyncio.sleep(2)
+                    # Возвращаем таск обратно в очередь на повтор
+                    await self.queue_new_mess.put(task_data)
+                else:
+                    logger.error(
+                        f"💥 [JumisAgent Worker] ПРЕВЫШЕН ЛИМИТ ПОПЫТОК ({MAX_RETRIES})! "
+                        f"Сообщение {msg_label} сброшено. Требуется ручная проверка."
+                    )
+
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"💥 [JumisAgent Worker] Критическая ошибка обработки: {e}", exc_info=True)
+                await asyncio.sleep(1)
+            finally:
+                self.queue_new_mess.task_done()
 
 
 
