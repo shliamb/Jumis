@@ -6,6 +6,7 @@ import re
 import html
 import traceback
 import markdown
+from llm.agents import TOOL_DESCRIPTIONS
 from aiogram.enums import ParseMode
 from html.parser import HTMLParser
 from stt_sense import stt
@@ -107,8 +108,29 @@ class TelegramHTMLCleaner(HTMLParser):
 
 
 
+# TOOL_DESCRIPTIONS = {
+#     # System / Date & Time
+#     "get_date": "Checking current date and time...",
 
+#     # Facts & Knowledge Base
+#     "add_category_facts": "Adding new fact category...",
+#     "write_fact": "Saving fact to memory...",
+#     "del_fact": "Deleting fact from database...",
+#     "search_facts": "Searching facts database...",
 
+#     # User Categories & Management
+#     "add_category_users": "Adding new user category...",
+#     "update_user": "Updating user profile...",
+#     "search_users": "Searching users database...",
+
+#     # Messages & History
+#     "msg_search": "Searching message history...",
+#     "msg_range": "Fetching message log range...",
+
+#     # Communications & Notifications
+#     "send_mess_peer": "Sending message to user...",
+#     "clear_inbox_notifs": "Clearing inbox notifications...",
+# }
 
 
 
@@ -130,6 +152,7 @@ class JumisAgent:
         self.queue_new_mess = queue_new_mess
         self.admin_id = ADMIN_ID
         self.use_rich_message = USE_RICH_MESSAGES
+        self.tool_descriptions = TOOL_DESCRIPTIONS
 
         # Словарь вида: {sender_id: {"username": str, "count": int, "last_text": str}}
         self.pending_peers = {}
@@ -624,12 +647,25 @@ class JumisAgent:
                             })
                         await self.llm.add_assistant_message(content=stream_text, tool_calls=tool_calls_for_msg)
                         full_text += stream_text + "\n"
+
+
+                        # --- ФОРМИРУЕМ ПОНЯТНЫЙ СТАТУС ДЛЯ ТУЛЗОВ ---
+                        status_lines = []
+                        for tc in tool_calls_info:
+                            name = tc['name']
+                            # Берем красивое описание из словаря или дефолтное
+                            action_desc = self.tool_descriptions.get(name, f"Executing {name}...")
+                            status_lines.append(f"🔧 {action_desc}")
+                        
+                        # Соединяем статусы (на случай, если модель вызвала 2 тулза одновременно)
+                        status_text = "\n".join(status_lines)
+
                         
                         try:
                             await self.bot.edit_message_text(
                                 chat_id=chat_id,
                                 message_id=msg.message_id,
-                                text=full_text + "🔧 Запускаю функцию..."
+                                text=f"{full_text}\n{status_text}".strip()
                             )
                             last_update_time = time.time()
                         except Exception:

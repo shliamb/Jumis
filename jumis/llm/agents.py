@@ -147,3 +147,27 @@ AGENTS = {
 
 }
 
+TOOL_DESCRIPTIONS = {
+    # System / Date & Time
+    "get_date": "Checking current date and time...",
+
+    # Facts & Knowledge Base
+    "add_category_facts": "Adding new fact category...",
+    "write_fact": "Saving fact to memory...",
+    "del_fact": "Deleting fact from database...",
+    "search_facts": "Searching facts database...",
+
+    # User Categories & Management
+    "add_category_users": "Adding new user category...",
+    "update_user": "Updating user profile...",
+    "search_users": "Searching users database...",
+
+    # Messages & History
+    "msg_search": "Searching message history...",
+    "msg_range": "Fetching message log range...",
+
+    # Communications & Notifications
+    "send_mess_peer": "Sending message to user...",
+    "clear_inbox_notifs": "Clearing inbox notifications...",
+}
+
