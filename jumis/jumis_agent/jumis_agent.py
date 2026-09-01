@@ -9,7 +9,8 @@ import markdown
 from aiogram.enums import ParseMode
 from html.parser import HTMLParser
 from stt_sense import stt
-from aiogram.exceptions import TelegramRetryAfter, TelegramAPIError, TelegramBadRequest
+from aiogram.exceptions import TelegramRetryAfter, TelegramAPIError, TelegramBadRequest, ClientDecodeError
+from pydantic import ValidationError
 from aiogram.methods import SendRichMessage
 from aiogram.types import InputRichMessage
 from config import ADMIN_ID, USE_RICH_MESSAGES
@@ -354,20 +355,30 @@ class JumisAgent:
             try:
                 rich_html = self.markdown_to_rich_html(llm_response)
 
-                # Если сообщение укладывается в лимит Rich (до 10 000 символов) — отправляем целиком
+                # 1. Если сообщение укладывается в лимит Rich (до 10 000 символов)
                 if len(rich_html) <= 10000:
-                    await self.bot(SendRichMessage(
-                        chat_id=chat_id,
-                        rich_message=InputRichMessage(html=rich_html)
-                    ))
-                else:
-                    # Если ответ гигантский (>10k символов) — нарезаем с запасом по 9000
-                    rich_chunks = self.split_html_text(rich_html, max_length=9000)
-                    for r_chunk in rich_chunks:
+                    try:
                         await self.bot(SendRichMessage(
                             chat_id=chat_id,
-                            rich_message=InputRichMessage(html=r_chunk)
+                            rich_message=InputRichMessage(html=rich_html)
                         ))
+                    except (ValidationError, ClientDecodeError) as e:
+                        # Сообщение физически доставлено пользователю.
+                        # Pydantic упал только на валидации структуры JSON-ответа сервера.
+                        logger.warning(f"RichMessage доставлен, но Pydantic споткнулся о response сервера: {e}")
+
+                # 2. Если ответ длинный (>10k символов) — режем на куски
+                else:
+                    rich_chunks = self.split_html_text(rich_html, max_length=9000)
+                    for r_chunk in rich_chunks:
+                        try:
+                            await self.bot(SendRichMessage(
+                                chat_id=chat_id,
+                                rich_message=InputRichMessage(html=r_chunk)
+                            ))
+                        except (ValidationError, ClientDecodeError) as e:
+                            # То же самое для каждого отдельного куска
+                            logger.warning(f"Rich-кусок доставлен, пропущена ошибка схемы Pydantic: {e}")
 
                 # Удаляем заглушку "Юмис печатает..." после успешной отправки
                 try:
@@ -375,10 +386,12 @@ class JumisAgent:
                 except Exception:
                     pass
 
-                return  # Успешно отправлено!
+                # ВАЖНО: Выходим из функции/метода, чтобы execution не ушел ниже в обычный fallback
+                return
 
             except Exception as e:
-                logger.warning(f"Rich Messages не сработали ({e}). Откатываемся на классический рендер...")
+                # Сюда попадем ТОЛЬКО при реальных сетевых сбоях, ошибках API Telegram или падении парсера
+                logger.error(f"Реальная ошибка Rich Messages (fallback на обычный HTML): {e}", exc_info=True)
 
         # =========================================================================
         # 2. КЛАССИЧЕСКИЙ РЕНДЕР (HTML Fallback с разбиением по 4000 символов)

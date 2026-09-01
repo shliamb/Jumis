@@ -15,6 +15,7 @@ from database.users import DBUsers
 from database.messages import DBMessages
 # from response.worker import ResponseWorker
 from jumis_agent.jumis_agent import JumisAgent
+from jsonbackup.json_backup import JsonBackup
 
 
 import logging
@@ -89,6 +90,14 @@ async def main_bot() -> None:
         print("База пользователей не инициализирована")
 
     dp["db_users"] = db_users # для хендлера start ..
+
+    # # Json сохранение таблиц и восстановление
+    # json_back = JsonBackup(
+    #     db_messages=db_messages,
+    #     db_memory=db_memory,
+    #     db_users=db_users
+    # )
+    # dp["json_back"] = json_back
 
     # Инициализация очереди и сообщений
     queue_messages = asyncio.Queue()
