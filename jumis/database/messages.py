@@ -13,6 +13,13 @@ class DBMessages():
         self.db = db
 
 
+    async def get_all_messages(self) -> list[dict]:
+        """ Все сообщения """
+        query = "SELECT * FROM messages ORDER BY id ASC;"
+        records = await self.db.fetch(query)
+        self.users_categories = [dict(rec) for rec in records] if records else []
+
+
     async def add_message(self, data: dict) -> Optional[int] | None:
         """
         Сохраняет сообщение в базу.

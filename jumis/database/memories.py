@@ -83,6 +83,14 @@ class DBMemories():
     ######## FACTS ##########
 
 
+    async def get_all_facts(self) -> list[dict]:
+        """ Все факты/воспоминания """
+        query = "SELECT * FROM memories ORDER BY id ASC;"
+        records = await self.db.fetch(query)
+        self.users_categories = [dict(rec) for rec in records] if records else []
+
+
+
     async def add_fact(self, fact_data: dict) -> Optional[int]:
         """Добавить факт и вернуть его id (или None в случае ошибки)."""
         fact_dict = fact_data.copy()
