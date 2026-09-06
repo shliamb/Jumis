@@ -17,7 +17,7 @@ class DBMessages():
         """ Все сообщения """
         query = "SELECT * FROM messages ORDER BY id ASC;"
         records = await self.db.fetch(query)
-        self.users_categories = [dict(rec) for rec in records] if records else []
+        return [dict(rec) for rec in records] if records else []
 
 
     async def add_message(self, data: dict) -> Optional[int] | None:

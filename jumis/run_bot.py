@@ -93,15 +93,6 @@ async def main_bot() -> None:
 
     dp["db_users"] = db_users # для хендлера start ..
 
-    # # Json сохранение таблиц и восстановление
-    # json_back = JsonBackup(
-    #     db_messages=db_messages,
-    #     db_memory=db_memory,
-    #     db_users=db_users,
-    #     db_tasks=db_tasks
-    # )
-    # dp["json_back"] = json_back
-
     # Инициализация очереди и сообщений
     queue_messages = asyncio.Queue()
 
@@ -149,6 +140,16 @@ async def main_bot() -> None:
         queue_new_mess=queue_new_mess,
         telethon_client=mytelethon
     )
+
+    # Json сохранение таблиц и восстановление
+    json_back = JsonBackup(
+        bot=dp.bot,
+        db_messages=db_messages,
+        db_memory=db_memory,
+        db_users=db_users,
+        db_tasks=db_tasks
+    )
+    dp["json_back"] = json_back
 
     jumis_agent = JumisAgent(
         bot=dp.bot,

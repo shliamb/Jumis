@@ -87,7 +87,7 @@ class DBMemories():
         """ Все факты/воспоминания """
         query = "SELECT * FROM memories ORDER BY id ASC;"
         records = await self.db.fetch(query)
-        self.users_categories = [dict(rec) for rec in records] if records else []
+        return [dict(rec) for rec in records] if records else []
 
 
 

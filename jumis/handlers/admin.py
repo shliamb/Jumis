@@ -44,8 +44,8 @@ async def admin_menu(message: types.Message):
         f"<b>🗳 BACKUP & RESTORE:</b>\n"
         # f"        Backup DB – /bupDb\n"
         # f"        Restore DB – /resDb\n"
-        f"        • Create Tab DB – /crTabDb\n\n"
-        # f"        • Down users – /dnlUsers\n"
+        f"        • Create Tab DB – /crTabDb\n"
+        f"        • Down JSON data – /dowjson\n\n"
         # f"        • Add Users – /resUs\n"
         # f"        • Down Orders – /dnlOrd\n"
         # f"        • Add Orders – /resOrd\n"
@@ -76,8 +76,8 @@ async def admin_menu(message: types.Message):
         f"<b>🗳 БЕКАП и ЗАПИСЬ:</b>\n"
         # f"        Backup DB – /bupDb\n"
         # f"        Restore DB – /resDb\n"
-        f"        • Созд. Таблицы Базы – /crTabDb\n\n"
-        # f"        • Скачать Польз. – /dnlUsers\n"
+        f"        • Созд. Таблицы Базы – /crTabDb\n"
+        f"        • Down JSON data – /dowjson\n\n"
         # f"        • Доб. Польз. – /resUs\n"
         # f"        • Скачать Заказы – /dnlOrd\n"
         # f"        • Доб. Заказы – /resOrd\n"
@@ -160,6 +160,26 @@ async def create_tebles_in_db_admin(message: types.Message):
     else:
         if lang == "ru": await message.answer("🚫 Ошибка при создании таблиц базы данных. Проверьте логи для получения подробной информации")
         else: await message.answer("🚫 Error creating DB tables. Check logs for details")
+
+
+# DOWNLOAD JSON DATA out DB
+@router.message(Command('dowjson'))
+async def download_json(message: types.Message, json_back):
+    """ Скачать из базы все таблицы в JSON """
+    await typing(message)
+    lang = message.from_user.language_code
+    user_id = message.from_user.id
+    if not await rights_verification(user_id, lang, message): return
+
+    await json_back.db_to_json()
+
+    # if create_tables_in_db(): # Синхронная
+    #     if lang == "ru": await message.answer("🎉 Таблицы в базе данных были успешно созданы")
+    #     else: await message.answer("🎉 Tables in the DB were created successfully")
+    # else:
+    #     if lang == "ru": await message.answer("🚫 Ошибка при создании таблиц базы данных. Проверьте логи для получения подробной информации")
+    #     else: await message.answer("🚫 Error creating DB tables. Check logs for details")
+
         
 
 # FAST DELETING all TABLES in DB
