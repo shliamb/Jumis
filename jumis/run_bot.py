@@ -13,6 +13,7 @@ from llm.llm_router import LLMWorker
 from database.memories import DBMemories
 from database.users import DBUsers
 from database.messages import DBMessages
+from database.tasks import DBTasks
 # from response.worker import ResponseWorker
 from jumis_agent.jumis_agent import JumisAgent
 from jsonbackup.json_backup import JsonBackup
@@ -72,6 +73,7 @@ async def main_bot() -> None:
     print("Успешное подключение к PostgreSQL.")
 
     db_messages = DBMessages()
+    db_tasks = DBTasks()
 
     # Инициализация памяти (загружает категории в кэш self)
     db_memory = DBMemories()
@@ -95,7 +97,8 @@ async def main_bot() -> None:
     # json_back = JsonBackup(
     #     db_messages=db_messages,
     #     db_memory=db_memory,
-    #     db_users=db_users
+    #     db_users=db_users,
+    #     db_tasks=db_tasks
     # )
     # dp["json_back"] = json_back
 

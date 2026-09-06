@@ -10,12 +10,12 @@ class JsonBackup():
         db_messages,
         db_memory,
         db_users,
-        tasks
+        db_tasks
     ):
         self.db_messages = db_messages
         self.db_memory = db_memory
         self.db_users = db_users
-        self.tasks = tasks
+        self.db_tasks = db_tasks
 
     """ Бекап таблиц ввиде Json
     
@@ -28,7 +28,7 @@ class JsonBackup():
 
 
     async def get_facts_cat(self):
-        pass
+        data: list[dict] = await self.db_messages._refresh_categories()
 
 
     async def get_users(self):
@@ -39,13 +39,9 @@ class JsonBackup():
         data: list[dict] = await self.db_messages.get_all_messages()
 
 
-    async def get_facts(self): # or name is memories
-        data: list[dict] = await self.db_memory._refresh_categories()
-
-
     async def get_memories(self):
         data: list[dict] = await self.db_memory.get_all_facts()
 
 
     async def get_tasks(self):
-        data: list[dict] = await self.tasks.get_all_tasks()
+        data: list[dict] = await self.db_tasks.get_tasks()
