@@ -1,4 +1,5 @@
 # jumis/jsonbackup/json_backup.py
+import asyncio
 import json
 import os
 import datetime
@@ -16,6 +17,17 @@ from config import ADMIN_ID
 
 class JsonBackup():
     """ Бекап таблиц ввиде Json """
+
+    # Маппинг иконок под каждую таблицу
+    TABLE_ICONS = {
+        "01_user_categories": "🏷️",
+        "02_facts_categories": "📂",
+        "03_users": "👤",
+        "04_facts": "🧠",
+        "05_messages": "💬",
+        "06_tasks": "📋",
+    }
+
 
     def __init__(
         self,
@@ -47,64 +59,120 @@ class JsonBackup():
         raise TypeError(f"Type {type(obj)} is not JSON serializable")
 
 
-    async def save_json_file(self, data: list[dict], name_action: str) -> str | bool:
-        """Сохраняем данные в JSON файл"""
+    async def save_json_files(
+        self, 
+        data: list[dict], 
+        name_action: str, 
+        max_records_per_file: int = 50
+    ) -> list[str]:
+        """
+        Сохраняет данные в JSON файл(ы). 
+        Если записей больше max_records_per_file, разбивает на автономные чанки-файлы.
+        """
+        saved_filepaths = []
         try:
-            # Проверяем и создаём папку
             os.makedirs(self.path_json, exist_ok=True)
-
-            # Создаем имя файла с текущей датой-временем
             timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
-            # Формируем корректный путь. 
-            filename = f"{name_action}_{timestamp}.json"
-            filepath = os.path.join(os.getcwd(), self.path_json, filename)
-            
-            # Записываем в файл.
-            with open(filepath, 'w', encoding='utf-8') as f:
-                json.dump(
-                    data, 
-                    f, 
-                    ensure_ascii=False, 
-                    indent=4,
-                    default=self._json_serializer
-                )
-            return filepath
+            # Разбиваем большой список на чанки
+            chunks = [
+                data[i : i + max_records_per_file] 
+                for i in range(0, len(data), max_records_per_file)
+            ]
+            total_parts = len(chunks)
+
+            for index, chunk in enumerate(chunks, start=1):
+                # Если файл всего один — сохраняем без суффикса _partN
+                if total_parts == 1:
+                    filename = f"{name_action}_{timestamp}.json"
+                else:
+                    filename = f"{name_action}_{timestamp}_part{index:02d}_of_{total_parts:02d}.json"
+
+                filepath = os.path.join(os.getcwd(), self.path_json, filename)
+
+                with open(filepath, 'w', encoding='utf-8') as f:
+                    json.dump(
+                        chunk, 
+                        f, 
+                        ensure_ascii=False, 
+                        indent=4,
+                        default=self._json_serializer
+                    )
+                saved_filepaths.append(filepath)
+
+            return saved_filepaths
 
         except Exception as e:
             logger.error(f"Error save file to JSON ({name_action}): {e}")
+            return []
+
+
+    async def _push_files(
+        self, 
+        name_action: str, 
+        filepaths: list[str], 
+        delay_seconds: float = 0.7
+    ) -> bool:
+        """Передает один или серию файлов JSON админу в Aiogram с небольшой задержкой"""
+        if not filepaths:
             return False
 
+        success = True
+        total_files = len(filepaths)
 
-    async def _push_file(self, name_action: str, filepath: str) -> bool:
-        """ Передает файл JSON админу в Aiogram"""
-        try:
-            if os.path.exists(filepath) and os.path.getsize(filepath) > 0:
+        # Достаем иконку для красивой подписи (по умолчанию 📁)
+        icon = self.TABLE_ICONS.get(name_action, "📁")
 
-                # Файлы отправляются через send_document, а не send_message
-                await self.bot.send_document(
-                    chat_id=self.admin_id,
-                    document=FSInputFile(filepath),
-                    caption=f"📁 JSON Backup: {name_action}"
-                )
-                return True
-            else:
-                logger.warning(f"File {filepath} is empty or not found.")
-                return False
-        except Exception as e:
-            logger.error(f"Error pushing file {filepath} to admin: {e}")
-            return False
+        for idx, filepath in enumerate(filepaths, start=1):
+            try:
+                if os.path.exists(filepath) and os.path.getsize(filepath) > 0:
+
+                    # Красивая визуальная подпись с иконкой
+                    caption_text = f"{icon} Backup: {name_action}"
+                    if total_files > 1:
+                        caption_text += f" (Часть {idx}/{total_files})"
+
+                    await self.bot.send_document(
+                        chat_id=self.admin_id,
+                        document=FSInputFile(filepath),
+                        caption=caption_text
+                    )
+
+                    # Пауза между файлами, чтобы Telegram API не выкинул Too Many Requests
+                    if idx < total_files:
+                        await asyncio.sleep(delay_seconds)
+
+                else:
+                    logger.warning(f"File {filepath} is empty or not found.")
+                    success = False
+            except Exception as e:
+                logger.error(f"Error pushing file {filepath} to admin: {e}")
+                success = False
+
+        return success
 
 
-    async def _process_table_backup(self, data: list[dict], name_action: str):
-        """Вспомогательный метод (DRY), чтобы не дублировать логику сохранения и отправки"""
+    async def _process_table_backup(
+        self, 
+        data: list[dict], 
+        name_action: str, 
+        max_records_per_file: int = 50
+    ):
+        """Единый конвейер для всех таблиц"""
         if not data:
             logger.warning(f"No data for {name_action}, skipping.")
             return
         
-        filepath = await self.save_json_file(data, name_action)
-        if filepath:
-            await self._push_file(name_action, filepath)
+        # 1. Сохраняем чанки
+        filepaths = await self.save_json_files(
+            data=data, 
+            name_action=name_action, 
+            max_records_per_file=max_records_per_file
+        )
+        
+        # 2. Отправляем все сформированные чанки в Telegram
+        if filepaths:
+            await self._push_files(name_action, filepaths)
 
 
 
@@ -115,33 +183,34 @@ class JsonBackup():
 
     async def get_users_cat(self):
         data = self.db_users.users_categories
-        await self._process_table_backup(data, "01_user_categories")
+        await self._process_table_backup(data, "01_user_categories", max_records_per_file=500)
 
 
     async def get_facts_cat(self):
         # Обычно категории фактов лежат в db_memory
         data = self.db_memory.fact_categories
-        await self._process_table_backup(data, "02_facts_categories")
+        await self._process_table_backup(data, "02_facts_categories", max_records_per_file=500)
 
 
     async def get_users(self):
         data = await self.db_users.get_users()
-        await self._process_table_backup(data, "03_users")
+        print("\n\n", data, "\n\n")
+        await self._process_table_backup(data, "03_users", max_records_per_file=500)
 
 
     async def get_memories(self):
         data = await self.db_memory.get_all_facts()
-        await self._process_table_backup(data, "04_facts")
+        await self._process_table_backup(data, "04_facts", max_records_per_file=1000)
 
 
     async def get_messages(self):
         data = await self.db_messages.get_all_messages()
-        await self._process_table_backup(data, "05_messages")
+        await self._process_table_backup(data, "05_messages", max_records_per_file=1000)
 
 
     async def get_tasks(self):
         data = await self.db_tasks.get_tasks()
-        await self._process_table_backup(data, "06_tasks")
+        await self._process_table_backup(data, "06_tasks", max_records_per_file=1000)
 
 
     async def db_to_json(self):

@@ -96,10 +96,13 @@ async def background_vectorize_fact(fact_id: int, content: str, db_memory):
     """Фоновая векторизация факта и обновление его записи в БД."""
     try:
         # 1. Получаем вектор
-        embedding = await embedder.get_embedding(content)
-        if not embedding:
-            logger.error(f"[BG Embedding] Failed to generate embedding for fact_id={fact_id}")
-            return
+        if embedder:
+            try:
+                embedding = await embedder.get_embedding(content)
+            except Exception as e:
+                logger.error("[background_vectorize_fact] Ошибка получения эмбеддинга: %s", e)
+        else:
+            logger.warning("[background_vectorize_fact] Embedder не передан.")
 
         fact_data = {
             "id": fact_id,
@@ -167,7 +170,16 @@ async def search_facts(
     if not db_memory:
         return "Error: Memory service is not available."
 
-    embedding_query = await embedder.get_embedding(query)
+
+    if embedder:
+        try:
+            embedding_query = await embedder.get_embedding(query)
+        except Exception as e:
+            logger.error("[search_facts] Ошибка получения эмбеддинга: %s", e)
+    else:
+        logger.warning("[search_facts] Embedder не передан")
+
+
     if not embedding_query:
         logger.error("Failed to generate embedding for query: %s", query)
         return "Error: Could not process search query embedding."
@@ -266,7 +278,14 @@ async def update_fact(
     if content is not None and content.strip():
         update_fields["content"] = content.strip()
         # КРИТИЧНО: При изменении текста факта генерируем новый вектор!
-        update_fields["embedding"] = await embedder.get_embedding(content.strip())
+        if embedder:
+            try:
+                update_fields["embedding"] = await embedder.get_embedding(content.strip())
+            except Exception as e:
+                logger.error("[update_fact] Ошибка получения эмбеддинга: %s", e)
+        else:
+            logger.warning("[update_fact] Embedder не передан")
+
 
     if facts_category is not None:
         update_fields["category"] = facts_category
@@ -547,7 +566,6 @@ async def update_user(
     tg_id: int | None = None,
     target_username: str | None = None,
     db_users=None,
-    embedder=None,
     **kwargs
 ) -> str:
     """Обновление профиля пользователя по одному из идентификаторов."""
@@ -555,7 +573,6 @@ async def update_user(
         return "Error: Database service 'db_users' is not available."
 
     user_data = {}
-    target_label = ""
 
     # 1. Выбираем СТРОГО один приоритетный идентификатор для поиска
     if user_id:
@@ -573,7 +590,7 @@ async def update_user(
         return "Error: Provide at least one identifier (user_id, tg_id, or target_username)."
 
     # 2. Исключаем системные сервисы и идентификаторы из списка обновляемых полей
-    EXCLUDE_KEYS = {"user_id", "tg_id", "target_username", "id", "embedder"}
+    EXCLUDE_KEYS = {"user_id", "tg_id", "target_username", "id", "embedder", "db_users"}
     
     update_fields = {}
     for key, val in kwargs.items():
@@ -590,20 +607,20 @@ async def update_user(
             
         update_fields[key] = val
 
-    # 3. Автоматический расчет aliases_vector при изменении aliases
+    # 3. Пересчет вектора алиасов, если они переданы
     if "aliases" in update_fields:
-        aliases_text = update_fields["aliases"]
-        if aliases_text and str(aliases_text).strip():
-            emb_service = embedder or kwargs.get("embedder") or globals().get("embedder")
-            if emb_service:
+        aliases_text = str(update_fields["aliases"] or "").strip()
+        
+        if aliases_text:
+            if embedder:
                 try:
-                    vector = await embedder.get_embedding(str(aliases_text).strip())
-                    if vector:
-                        update_fields["aliases_vector"] = vector
+                    update_fields["aliases_vector"] = await embedder.get_embedding(aliases_text)
                 except Exception as e:
-                    logger.error(f"[update_user] Ошибка генерации эмбеддинга для aliases: {e}")
+                    logger.error(f"[update_user] Ошибка генерации эмбеддинга: {e}")
+            else:
+                logger.warning("[update_user] Переданы aliases, но embedder не предоставлен.")
         else:
-            # Если алиасы занулили или очистили — сбрасываем и вектор
+            # Если алиасы очистили/занулили — сбрасываем вектор
             update_fields["aliases_vector"] = None
 
     # 4. Проверяем, передал ли AI хоть одно поле для изменения
@@ -614,6 +631,9 @@ async def update_user(
     user_data.update(update_fields)
 
     # 5. Вызываем метод БД
+
+    print("\n\n\n", user_data, "\n\n\n")
+
     success = await db_users.db_update_user(user_data)
 
     if not success:
@@ -706,27 +726,26 @@ async def search_users(
     category: str = None,
     limit: int = 5,
     db_users=None,
-    embedder=None, # Заебал...
     **kwargs  # Защита от лишних аргументов LLM
 ) -> str:
-    """Инструмент поиска пользователей с выводом всех полей профиля (кроме эмбеддинга)."""
+    """Инструмент поиска пользователей с поддержкой векторного и текстового поиска."""
     if not db_users:
         return "Error: Users service is unavailable."
 
-    emb_service = embedder or kwargs.get("embedder") or globals().get("embedder")
-
     vector = None
+
+    # 1. Если есть текстовый запрос и доступен embedder — генерируем вектор
     if query and str(query).strip():
-        if not emb_service:
-            logger.warning("[search_users] Embedder is not available for semantic query.")
-            return "Error: Embedding service is not configured for text search."
+        clean_query = str(query).strip()
+        if embedder:
+            try:
+                vector = await embedder.get_embedding(clean_query)
+            except Exception as e:
+                logger.error("[search_users] Ошибка получения эмбеддинга: %s", e)
+        else:
+            logger.warning("[search_users] Embedder не передан, поиск будет только по тексту.")
 
-        try:
-            vector = await emb_service.get_embedding(str(query).strip())
-        except Exception as e:
-            logger.error("[search_users] Ошибка получения эмбеддинга: %s", e)
-
-    # Поиск в БД по всем переданным фильтрам
+    # 2. Поиск в БД (БД сама решает: искать по vector, по query или гибридно)
     users = await db_users.search_users(
         query=query,
         vector=vector,
@@ -739,7 +758,7 @@ async def search_users(
     if not users:
         return "No users found matching the specified search criteria."
 
-    # Форматирование полной информации обо всех полях (без aliases_vector)
+    # 3. Форматирование полной информации обо всех полях (без aliases_vector)
     formatted_blocks = []
     for u in users:
         uid = u.get("id", "N/A")
@@ -799,7 +818,6 @@ async def msg_search(
     chat_id: int = None, 
     limit: int = 5,
     db_messages=None,
-    embedder=None,
     **kwargs  # Защита от лишних аргументов LLM
 ) -> str:
     """
@@ -809,22 +827,15 @@ async def msg_search(
     if not db_messages:
         return "Error: Database service 'db_messages' is not available."
 
-    # Извлечение эмбеддера из аргументов или контекста
-    emb_service = embedder or kwargs.get("embedder")
-    if not emb_service:
+    if embedder:
         try:
-            emb_service = globals().get("embedder")
-        except Exception:
-            pass
+            embedding_query = await embedder.get_embedding(query)
+        except Exception as e:
+            logger.error(f"[msg_search] Ошибка генерации эмбеддинга для '{query}': {e}")
+            return "Error: Could not process search query embedding."
+        else:
+            logger.warning("[msg_search] Embedder не передан")
 
-    if not emb_service:
-        return "Error: Embedding service is not configured."
-
-    try:
-        embedding_query = await emb_service.get_embedding(query)
-    except Exception as e:
-        logger.error(f"[msg_search] Ошибка генерации эмбеддинга для '{query}': {e}")
-        return "Error: Could not process search query embedding."
 
     if not embedding_query:
         logger.error("[msg_search] Вектор для запроса '%s' не получен.", query)

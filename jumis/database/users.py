@@ -32,13 +32,6 @@ class DBUsers():
         self.users_categories = [dict(rec) for rec in records] if records else []
 
 
-    async def get_users(self) -> list[dict]:
-        """ Все пользователи """
-        query = "SELECT * FROM users ORDER BY id ASC;"
-        records = await self.db.fetch(query)
-        return [dict(rec) for rec in records] if records else []
-
-
     async def add_category(self, category_data: dict) -> bool:
         """Добавление или обновление категории из словаря"""
 
@@ -95,6 +88,13 @@ class DBUsers():
     #####################
     ####### USERS #######
     #####################
+
+
+    async def get_users(self) -> list[dict]:
+        """ Все пользователи для бекапа"""
+        query = "SELECT * FROM users ORDER BY id ASC;"
+        records = await self.db.fetch(query)
+        return [dict(rec) for rec in records] if records else []
 
 
     async def chek_tg_id(self, tg_id: int):

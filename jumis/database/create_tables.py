@@ -61,7 +61,7 @@ def create_tables_in_db():
             summary TEXT,                                  -- Краткая выжимка диалога от ИИ для быстрого контекста
             
             aliases TEXT,                                  -- Приметы/алиасы: "Петя, петух, младший брат, братик.."
-            aliases_vector vector(1536),                   -- Вектор для поиска (размерность модель эмбеддингов 768)
+            aliases_vector vector(768),                   -- Вектор для поиска (размерность модель эмбеддингов 768)
 
             is_admin BOOLEAN DEFAULT FALSE,                
             is_blocked BOOLEAN DEFAULT FALSE,              -- Игнорировать любые сообщения от него
