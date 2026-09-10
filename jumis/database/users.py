@@ -98,7 +98,7 @@ class DBUsers():
 
 
     async def chek_tg_id(self, tg_id: int):
-        """ ... """
+        """ Быстрая проверка наличия в таблице tg_id """
         query = "INSERT INTO users (tg_id) VALUES ($1) ON CONFLICT (tg_id) DO NOTHING"
         return await self.db.execute(query, tg_id) or False
 

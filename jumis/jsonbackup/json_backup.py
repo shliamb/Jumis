@@ -6,6 +6,7 @@ import datetime
 from uuid import UUID
 from decimal import Decimal
 from aiogram import types
+from typing import Any, Dict, List
 from aiogram.types import FSInputFile
 from logs.set_logger import set_logger
 logger = set_logger(name="backup_json")
@@ -46,8 +47,9 @@ class JsonBackup():
         self.db_tasks = db_tasks
 
 
-    def _json_serializer(self, obj):
-        """Сериализация специфичных типов (datetime, UUID, Decimal), которые стандартный JSON не понимает"""
+    @staticmethod
+    def _json_serializer(obj: Any) -> Any:
+        """Сериализатор: из типов Python/БД в валидный JSON-формат."""
         if isinstance(obj, datetime.datetime):
             return obj.isoformat()
         if isinstance(obj, datetime.date):
@@ -57,6 +59,30 @@ class JsonBackup():
         if isinstance(obj, Decimal):
             return float(obj)
         raise TypeError(f"Type {type(obj)} is not JSON serializable")
+
+
+    @staticmethod
+    def _prepare_for_db(rec: Dict[str, Any]) -> Dict[str, Any]:
+        """Десериализатор: из ISO-строк JSON обратно в объекты Python/БД."""
+        parsed_rec = {}
+
+        for key, val in rec.items():
+            # 1. Выбрасываем внутренний id таблицы — БД сама сгенерирует новый SERIAL
+            if key == "id":
+                continue
+
+            # 2. Парсим только строки с ключами дат (_at, _date, due_*)
+            if isinstance(val, str) and (
+                key.endswith("_at") or key.endswith("_date") or key.startswith("due_")
+            ):
+                try:
+                    # Вызываем fromisoformat у класса datetime.datetime
+                    parsed_rec[key] = datetime.datetime.fromisoformat(val.replace("Z", "+00:00"))
+                except ValueError:
+                    parsed_rec[key] = val
+            else:
+                parsed_rec[key] = val
+        return parsed_rec
 
 
     async def save_json_files(
@@ -194,7 +220,7 @@ class JsonBackup():
 
     async def get_users(self):
         data = await self.db_users.get_users()
-        print("\n\n", data, "\n\n")
+        # print("\n\n", data, "\n\n")
         await self._process_table_backup(data, "03_users", max_records_per_file=500)
 
 
@@ -238,6 +264,63 @@ class JsonBackup():
 
 
 
+    # ===================================================
+    # Методы воссатновления таблиц в базе по JSON файлам
+    # ===================================================
+
+
+    async def restore_table_from_file(self, name_action: str, filepath: str) -> tuple[bool, int, int]:
+        """Читает JSON-файл и распределяет запись по соответствующим сервисам БД."""
+        good_count, bad_count = 0, 0
+
+        if not os.path.exists(filepath):
+            logger.error(f"File not found: {filepath}")
+            return False, good_count, bad_count
+
+        try:
+            with open(filepath, "r", encoding="utf-8") as f:
+                list_data = json.load(f)
+
+            if not isinstance(list_data, list):
+                logger.error(f"JSON structure invalid in {filepath}: expected list.")
+                return False, good_count, bad_count
+                
+        except Exception as e:
+            logger.error(f"Error reading JSON file {filepath}: {e}")
+            return False, good_count, bad_count
+
+        # Диспетчер методов сохранения в БД
+        save_handlers = {
+            "01_user_categories": getattr(self.db_users, "add_category", None),
+            "02_facts_categories": getattr(self.db_memory, "add_category", None),
+            "03_users": getattr(self.db_users, "add_user", None),
+            "04_facts": getattr(self.db_memory, "add_fact", None),
+            "05_messages": getattr(self.db_messages, "add_message", None),
+            "06_tasks": getattr(self.db_tasks, "add_task", None),
+        }
+
+        db_handler = save_handlers.get(name_action)
+        if not db_handler:
+            logger.error(f"Unknown action table: {name_action}")
+            return False, good_count, bad_count
+
+        # Запись элементов
+        for rec in list_data:
+            try:
+                # 💡 Превращаем строки дат обратно в datetime объекты
+                clean_rec = self._prepare_for_db(rec)
+
+                success = await db_handler(clean_rec)
+                if success:
+                    good_count += 1
+                else:
+                    bad_count += 1
+            except Exception as e:
+                logger.error(f"Error inserting row into {name_action}: {e}")
+                bad_count += 1
+
+        overall_success = (bad_count == 0 and good_count > 0)
+        return overall_success, good_count, bad_count
 
 
 
@@ -250,59 +333,83 @@ class JsonBackup():
 
 
 
+    # #
+    # async def restore_tasks_from_file(self, name_action: str, filepath: str) -> tuple[bool, int, int]:
+    #     """Читает JSON-файл и загружает их в БД."""
+    #     good_count, bad_count = 0, 0
 
-
-
-
-
-    # async def save_json_file(self, data: list[dict], name_action: str) -> str | bool:
-    #     """Сохраняем данные в JSON файл"""
-    #     json_list = []
     #     try:
+    #         if not os.path.exists(filepath):
+    #             logger.error(f"File not found: {filepath}")
+    #             return False, good_count, bad_count
 
-    #         # Проверяем и создаём папку
-    #         os.makedirs(self.path_json, exist_ok=True)
+    #         with open(filepath, "r", encoding="utf-8") as f:
+    #             # Тут явно нужно будет нам обратную сериализацию сделать даты + время позже разберем
+    #             list_data = json.load(f)
 
-    #         # Создаем имя файла с текущей датой-временем
-    #         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-
-    #         # Безопасно создаём файл
-    #         filename = os.path.join(self.path_json, f"{name_action}_{timestamp}.json")
+    #         if not isinstance(list_data, list):
+    #             logger.error("JSON structure invalid: expected a list of dicts.")
+    #             return False, good_count, bad_count
             
-    #         # Полный путь к файлу в рабочей директории
-    #         filepath = os.path.join(os.getcwd(), filename)
-
-    #         list_data: list[dict] = data.copy() # ?????!!!!! 
-    #         keys_need_serialized = ["created_at", "updated_at", "scheduled_at"]
-
-    #         for rec in list_data:
-    #             json_dict = {}
-    #             for key, value in rec.items():
-    #                 if key in keys_need_serialized:
-    #                     json_dict[key] = await self._json_serializer(value)
-    #                 json_dict[key] = value
-
-    #             json_list.append(json_dict)
-
-            
-    #         # Сохраняем с обработкой специальных типов
-
-    #         try:
-    #             """ предвижу возможные ошибки, потому лучше try"""
-    #             with open(filename, 'w', encoding='utf-8') as f:
-    #                 json.dump(
-    #                     json_list, 
-    #                     f, 
-    #                     ensure_ascii=False, 
-    #                     indent=4,
-    #                     #default=self._json_serializer
-    #                 )
-    #             return filepath
-    #         except:
-    #             print("")
-    #             logger.error("")
-    #             return False
-
     #     except Exception as e:
-    #         logger.error(f"Error save file to JSON: {e}")
-    #         return False
+    #         logger.error(f"Error get file JSON {filepath}: {e}")
+    #         return False, good_count, bad_count
+
+
+    #     #### SAVE DATA to DB ####
+
+    #     # Cat Users
+    #     if name_action == "01_user_categories":
+    #         try:
+    #             for rec in list_data:
+    #                 sucsses = await self.db_users.add_category(rec)
+    #                 if sucsses:
+    #                     good_count += 1
+    #                 else:
+    #                     bad_count += 1
+    #             return True, good_count, bad_count
+            
+    #         except Exception as e:
+    #             logger.error(f"Error restoring {name_action} from DB: {e}")
+    #             return False, good_count, bad_count
+
+    #     # CAT Memries
+    #     elif name_action == "02_facts_categories":
+    #         ..
+    #         await self.db_memory.add_category(rec)
+
+    #     # Users
+    #     elif name_action == "03_users":
+    #         await self.db_users.add_user(rec)
+
+    #     # Facts in to memories
+    #     elif name_action == "04_facts":
+    #         await self.db_memory.add_fact(rec)
+
+    #     # Messages
+    #     elif name_action == "05_messages":
+    #         await self.db_messages.add_message(rec)
+
+    #     # Tasks
+    #     elif name_action == "06_tasks":
+    #         await self.db_tasks.add_task(rec)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

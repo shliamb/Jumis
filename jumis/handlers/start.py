@@ -66,7 +66,7 @@ async def start_router(message: types.Message, db_users):
         return
 
     # 3. Проверка наличия пользователя в базе
-    if await db_users.db_get_user(tg_id=user_id):
+    if await db_users.chek_tg_id(tg_id=user_id):
         await message.answer(get_msg("already_registered", lang))
         return
 

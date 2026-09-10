@@ -631,9 +631,6 @@ async def update_user(
     user_data.update(update_fields)
 
     # 5. Вызываем метод БД
-
-    print("\n\n\n", user_data, "\n\n\n")
-
     success = await db_users.db_update_user(user_data)
 
     if not success:
@@ -1032,74 +1029,6 @@ async def send_mess_peer(peer_id: int, text_mess: str, mytelethon, queue_new_mes
         logger.error(f"[send_mess_peer] Unexpected error for {peer_id}: {e}", exc_info=True)
         return f"Fatal error: Exception occurred while sending message: {type(e).__name__} - {str(e)}"
 
-
-
-
-
-
-# async def send_mess_peer(peer_id: int, text_mess: str, mytelethon, queue_new_mess) -> str:
-#     """
-#     Отправляет прямое сообщение пользователю Telegram через Telethon от имени Владельца
-#     и напрямую прокидывает событие в очередь для сброса виджета JumisAgent.
-#     :param peer_id: Telegram ID получателя
-#     :param text_mess: Согласованный текст сообщения
-#     :param mytelethon: Клиент Telethon
-#     :return: Понятный статус выполнения для LLM
-#     """
-#     if not peer_id or not text_mess or not text_mess.strip():
-#         return "Error: Invalid arguments. Both 'peer_id' and non-empty 'text_mess' are required."
-
-#     # Жёсткая зачистка ИИ-артефактов перед отправкой
-#     clean_text = sanitize_human_text(text_mess)
-
-#     if not clean_text:
-#         return "Error: Message became empty after cleaning emojis and tags."
-
-#     try:
-#         answer = await mytelethon.send_message(
-#             message_text=clean_text,
-#             telegram_id=peer_id,
-#             username=None
-#         )
-
-#         if answer is None:
-#             logger.error(f"[send_mess_peer] Failed to send message to {peer_id}: returned None")
-#             return f"Error: Message to {peer_id} was not sent (service returned None)."
-
-#         ####### 
-
-#         task_payload = {
-#             "chat_id": peer_id,
-#             "sender_id": ADMIN_ID,
-#             "recipient_id": peer_id,
-
-#             "tg_msg_id": ...,
-#             "msg_db_id": None,
-
-#             "username": "admin",
-#             "content": clean_text,
-#             "direction": "outbound_owner",
-#             "msg_type": "text",
-#             "created_at": ....
-#         }
-
-#         await queue_new_mess.put(task_payload)
-
-#         ######
-
-#         if isinstance(answer, int):
-#             logger.info(f"[send_mess_peer] Message sent to {peer_id}")
-#             return f"Success: Message successfully sent to peer_id {peer_id}."
-
-#         if isinstance(answer, str):
-#             logger.error(f"[send_mess_peer] Telethon error for {peer_id}: {answer}")
-#             return f"Error sending message to {peer_id}: {answer}"
-
-#         return f"Success: Message sent to {peer_id}." # ))))
-
-#     except Exception as e:
-#         logger.error(f"[send_mess_peer] Unexpected error for {peer_id}: {e}", exc_info=True)
-#         return f"Fatal error: Exception occurred while sending message: {type(e).__name__} - {str(e)}"
 
 
 

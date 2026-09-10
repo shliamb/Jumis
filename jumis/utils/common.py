@@ -19,17 +19,21 @@ def extract_text_after_id(text: str):
 
 
 
+
+
 def sanitize_human_text(text: str) -> str:
     """
     Приводит текст к обычному 'человеческому' виду:
     - Заменяет длинные тире ('—', '–') на короткий дефис ('-')
     - Полностью удаляет эмодзи и иконки
-    - Снимает Markdown-разметку (#, **, *, _)
+    - Снимает Markdown-разметку (#, **, *, _, `)
+    - Сохраняет аккуратные абзацы и структуру
     """
     if not text:
         return ""
 
-    # 1. Замена длинных и средних тире на стандартный дефис
+    # 1. Нормализация переносов строк и тире
+    text = text.replace('\r\n', '\n').replace('\r', '\n')
     text = text.replace("—", "-").replace("–", "-")
 
     # 2. Удаление ИИ-заголовков (символы # в начале строк)
@@ -54,16 +58,16 @@ def sanitize_human_text(text: str) -> str:
     )
     text = emoji_pattern.sub("", text)
 
-    # 4. Удаление Markdown-тегов (#, **, *, _)
-    text = re.sub(r'^\s*#+\s*', '', text, flags=re.MULTILINE)
+    # 4. Удаление Markdown-тегов (**, *, _, `)
     text = re.sub(r'\*{1,2}(.*?)\*{1,2}', r'\1', text)
     text = re.sub(r'_{1,2}(.*?)_{1,2}', r'\1', text)
     text = re.sub(r'`{1,3}(.*?)(`{1,3}|$)', r'\1', text)
 
-    # 5. Нормализация пробелов
-    text = re.sub(r'[ \t]+', ' ', text)
+    # 5. Построчная очистка: убираем лишние пробелы, сохраняя пустые строки
+    lines = [re.sub(r'[ \t]+', ' ', line).strip() for line in text.split('\n')]
+    text = '\n'.join(lines)
+
+    # 6. Ограничение подряд идущих пустых строк (не более 1 пустой строки между абзацами)
     text = re.sub(r'\n{3,}', '\n\n', text)
 
     return text.strip()
-
-
