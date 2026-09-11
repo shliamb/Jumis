@@ -55,95 +55,15 @@ AGENTS = {
 
             # SENDING MESSAGES
             "send_mess_peer",
-            "clear_inbox_notifs"
+            "clear_inbox_notifs",
+
+            # TASKS
+            "add_task",
+            "update_task",
+            "search_tasks",
+            "del_task"
         ]
-    },
-
-    # "tg_inbound_agent": {
-    #     "system": (
-
-    #         "[Task]\n"
-    #         "Gather context for incoming messages and pass structured facts to Jumis.\n"
-    #         "\n"
-    #         "[Fast Path]\n"
-    #         "- If the message is a simple greeting or fluff (\"Hi\", \"Hello\"): SKIP deep searches. Check profile and output immediately.\n"
-    #         "\n"
-    #         "[Tools]\n"
-    #         "- `search_users`: Profile (check comment — personal note, and summary — dialog brief).\n"
-    #         "- `msg_search`: Message history (limit equals incoming batch size).\n"
-    #         "- `search_facts`: Rules and facts (ONLY for specific questions).\n"
-    #         "- `update_user`: Save comment / summary (if empty and new facts exist).\n"
-    #         "- `update_fact`: Save new rules and agreements.\n"
-    #         "\n"
-    #         "[Rules]\n"
-    #         "- Keep comment / summary to concise facts (identity, status, topic). Raw log dumps strictly prohibited.\n"
-    #         "\n"
-    #         "[Output Format]\n"
-    #         "• Sender: [Name / ID] writing to Owner\n"
-    #         "• Summary: [Core meaning]\n"
-    #         "• DB Context: [Comment, Summary, history/facts]\n"
-    #         "• Gaps: [Requires Owner's decision]\n"
-
-
-    #         # [Задача]
-    #         # Собрать контекст по входящему сообщению и передать фактуру Юмис.
-
-    #         # [Быстрый проход]
-    #         # - Если сообщение — просто приветствие или флуд ("Привет", "Ау"): НЕ вызывай поиск по фактам и истории. Проверь профиль и сразу выдавай результат.
-
-    #         # [Инструменты]
-    #         # - `search_users`: Профиль (проверяй comment — заметку и summary — выжимку).
-    #         # - `msg_search`: История переписки (лимит равен пачке входящих).
-    #         # - `search_facts`: Правила и факты (ТОЛЬКО при конкретном вопросе).
-    #         # - `update_user`: Обновление comment / summary (если пусты и есть новые факты).
-    #         # - `update_fact`: Запись новых правил и договоренностей.
-
-    #         # [Правила]
-    #         # - В comment / summary пиши только краткие факты (кто это, статус, тема). Копировать сырой текст запрещено.
-
-    #         # [Формат вывода]
-    #         # • Собеседник: [Имя / ID] пишет Владельцу
-    #         # • Суть сообщения: [Краткая суть]
-    #         # • Контекст БД: [Comment, Summary, история/факты]
-    #         # • Пробелы: [Что требует решения Владельца]
-
-    #     ),
-        # "tools": [
-        #     # DATE
-        #     "get_date",
-
-        #     # CATEGORIES FACTS
-        #     # "get_categories_facts", # Для теста, ИИ и так знает категории из tools
-        #     "add_category_facts",
-
-        #     # FACTS
-        #     "write_fact",
-        #     #"update_fact",
-        #     "del_fact",
-        #     "search_facts",
-        #     # "facts_by_cat",
-        #     # "facts_by_user",
-
-        #     # CATEGORIES USERS
-        #     "add_category_users",
-        #     # "get_categories_users",
-
-        #     # USERS +
-        #     # "get_users", Хитрит и получает сразу всех - не экономно сука..
-        #     # "get_user", Нахер не нужно, все есть в search_users даже по вектору..
-        #     "update_user",
-        #     "search_users",
-
-        #     # Messages +
-        #     "msg_search",
-        #     "msg_range",
-
-        #     # SENDING MESSAGES +
-        #     "send_mess_peer",
-        #     "clear_inbox_notifs",
-        #     # "get_pending_queue" - на всякий случай функция есть, но она не нужна
-        # ]
-    # }
+    }
 
 }
 
@@ -169,5 +89,10 @@ TOOL_DESCRIPTIONS = {
     # Communications & Notifications
     "send_mess_peer": "Sending message to user...",
     "clear_inbox_notifs": "Clearing inbox notifications...",
-}
 
+    # Scheduler tasks
+    "add_task": "Creating new scheduled task...",
+    "update_task": "Updating scheduled task...",
+    "search_tasks": "Fetching scheduled tasks...",
+    "del_task": "Deleting scheduled task..."
+}

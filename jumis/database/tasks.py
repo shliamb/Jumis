@@ -12,50 +12,7 @@ class DBTasks:
         self.db = db
 
 
-    async def get_tasks(self) -> List[Dict[str, Any]]:
-        """ Получение вообще всех тасок (например, для админки) """
-        query = "SELECT * FROM scheduled_tasks ORDER BY id ASC;"
-        try:
-            records = await self.db.fetch(query)
-            return [dict(rec) for rec in records] if records else []
-        except Exception as e:
-            logger.error(f"Error fetching all tasks: {e}")
-            return []
-
-
-    async def get_task_by_id(self, id_task: int) -> Optional[Dict[str, Any]]:
-        """ Получить одну задачу по её ID """
-        if not id_task:
-            return None
-        
-        query = "SELECT * FROM scheduled_tasks WHERE id = $1;"
-        try:
-            record = await self.db.fetchrow(query, id_task)
-            return dict(record) if record else None
-        except Exception as e:
-            logger.error(f"Error fetching task by id {id_task}: {e}")
-            return None
-
-
-    async def get_due_tasks(self) -> List[Dict[str, Any]]:
-        """ 
-        Запрос для фонового демона: выбирает 'pending' задачи, 
-        время выполнения которых уже наступило (использует индекс idx_tasks_execution).
-        """
-        query = """
-            SELECT * FROM scheduled_tasks 
-            WHERE status = 'pending' AND scheduled_at <= NOW() 
-            ORDER BY scheduled_at ASC;
-        """
-        try:
-            records = await self.db.fetch(query)
-            return [dict(rec) for rec in records] if records else []
-        except Exception as e:
-            logger.error(f"Error fetching due tasks: {e}")
-            return []
-
-
-    async def add_task(self, task_data: dict) -> Optional[int]:
+    async def db_add_task(self, task_data: dict) -> Optional[int]:
         """ 
         Добавить задачу. 
         Возвращает ID созданной задачи (int) при успехе, иначе None.
@@ -83,21 +40,6 @@ class DBTasks:
         except Exception as e:
             logger.error(f"Error adding task: {e}")
             return None
-
-
-    async def del_task(self, id_task: int) -> bool:
-        """ Удаление таски по ID """
-        if not id_task:
-            logger.error("del_task: id_task was not provided.")
-            return False
-
-        query = "DELETE FROM scheduled_tasks WHERE id = $1;"
-        try:
-            await self.db.execute(query, id_task)
-            return True
-        except Exception as e:
-            logger.error(f"Error deleting task {id_task}: {e}")
-            return False
 
 
     async def db_update_task(self, task_data: dict) -> bool:
@@ -155,3 +97,96 @@ class DBTasks:
         except Exception as e:
             logger.error(f"Error updating task {id_task}: {e}")
             return False
+
+
+    async def db_del_task(self, id_task: int) -> bool:
+        """ Удаление таски по ID """
+        if not id_task:
+            logger.error("del_task: id_task was not provided.")
+            return False
+
+        query = "DELETE FROM scheduled_tasks WHERE id = $1;"
+        try:
+            await self.db.execute(query, id_task)
+            return True
+        except Exception as e:
+            logger.error(f"Error deleting task {id_task}: {e}")
+            return False
+
+
+    async def db_search_tasks(
+        self, 
+        task_id: Optional[int] = None, 
+        status: Optional[str] = None, 
+        limit: int = 20
+    ) -> List[Dict[str, Any]]:
+        """
+        Получение списка задач с фильтрацией по ID задачи или по статусу.
+        
+        Args:
+            task_id (Optional[int]): Уникальный ID конкретной задачи.
+            status (Optional[str]): Статус ('pending', 'running', 'completed', 'cancelled').
+            limit (int): Максимальное количество записей (по умолчанию 20).
+        """
+        conditions = []
+        params = []
+
+        # 1. Если передан конкретный ID — ищем только его
+        if task_id is not None:
+            params.append(task_id)
+            conditions.append(f"id = ${len(params)}")
+        # 2. Если ID не передан, но указан статус
+        elif status is not None:
+            params.append(status)
+            conditions.append(f"status = ${len(params)}")
+
+        where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+
+        # Добавляем limit последним параметром
+        params.append(limit)
+        limit_clause = f"LIMIT ${len(params)}"
+
+        query = f"""
+            SELECT 
+                id, tg_id, task_type, title, agent_instruction, 
+                scheduled_at, cron_expression, repeat_interval_minutes, 
+                requires_ack, is_ack_received, max_nag_attempts, current_nag_count, 
+                status, created_at, updated_at
+            FROM scheduled_tasks 
+            {where_clause} 
+            ORDER BY scheduled_at ASC 
+            {limit_clause};
+        """
+
+        try:
+            records = await self.db.fetch(query, *params)
+            return [dict(rec) for rec in records] if records else []
+        except Exception as e:
+            logger.error(f"[DB Tasks] Ошибка получения задач (id={task_id}, status={status}): {e}", exc_info=True)
+            return []
+
+
+    async def get_pending_task(self) -> Dict[str, Any]:
+        """
+        Запрашивает из БД самую ближайшую по времени задачу в статусе 'pending'.
+
+        Returns:
+            Dict[str, Any]: Словарь с полями задачи или пустой словарь, если задач нет или произошла ошибка.
+        """
+        query = """
+            SELECT 
+                id, tg_id, task_type, title, agent_instruction, 
+                scheduled_at, cron_expression, repeat_interval_minutes, 
+                requires_ack, is_ack_received, max_nag_attempts, current_nag_count
+            FROM scheduled_tasks 
+            WHERE status = 'pending' 
+            ORDER BY scheduled_at ASC 
+            LIMIT 1;
+        """
+        try:
+            record = await self.db.fetchrow(query)
+            return dict(record) if record else {}
+        except Exception as e:
+            logger.error(f"[DB Tasks] Ошибка при получении активной задачи: {e}", exc_info=True)
+            return {}
+

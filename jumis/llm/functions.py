@@ -389,177 +389,6 @@ async def get_categories_users(db_users=None) -> str:
 
 
 
-# async def get_users(db_users=None) -> str:
-#     """Возвращает отформатированный список всех пользователей со всеми полями из БД для LLM."""
-#     users: list[dict] = await db_users.get_all_users()
-
-#     if not users:
-#         logger.info("No users found in database.")
-#         return "No registered users found in the database."
-
-#     formatted_users = []
-    
-#     for u in users:
-#         user_id = u.get("id", "N/A")
-        
-#         # 1. Собираем активные флаги статуса
-#         flags = []
-#         if u.get("is_admin"):
-#             flags.append("ADMIN")
-#         if u.get("is_blocked"):
-#             flags.append("BLOCKED")
-#         if u.get("is_whitelisted"):
-#             flags.append("WHITELISTED")
-#         if u.get("is_bot"):
-#             flags.append("BOT")
-#         flags_str = f" [{', '.join(flags)}]" if flags else ""
-
-#         # 2. Дата регистрации без секунды/миллисекунд
-#         created_at = u.get("created_at")
-#         if isinstance(created_at, datetime):
-#             date_str = created_at.strftime("%Y-%m-%d %H:%M")
-#         elif created_at:
-#             date_str = str(created_at)[:16]
-#         else:
-#             date_str = "no-date"
-
-#         # Заголовок карточки пользователя
-#         user_lines = [f"• User #{user_id}{flags_str} (registered: {date_str})"]
-
-#         # 3. Идентификаторы и контакты
-#         contacts = []
-#         if tg_id := u.get("tg_id"):
-#             contacts.append(f"TG ID: {tg_id}")
-#         if username := u.get("username"):
-#             contacts.append(f"@{username}")
-#         if full_name := u.get("full_name"):
-#             contacts.append(f"Name: {full_name}")
-#         if phone := u.get("phone"):
-#             contacts.append(f"Phone: {phone}")
-        
-#         if contacts:
-#             user_lines.append(f"  - Contacts: {' | '.join(contacts)}")
-
-#         # 4. Категория, язык и модели
-#         sys_info = []
-#         if category := u.get("category"):
-#             sys_info.append(f"Category: {category}")
-#         if lang := u.get("lang_code"):
-#             sys_info.append(f"Lang: {lang}")
-#         if model_def := u.get("model_default"):
-#             sys_info.append(f"Model: {model_def}")
-#         if model_cheap := u.get("model_cheap"):
-#             sys_info.append(f"Model Cheap: {model_cheap}")
-#         if model_smart := u.get("model_smart"):
-#             sys_info.append(f"Model Smart: {model_smart}")
-
-#         if sys_info:
-#             user_lines.append(f"  - System: {' | '.join(sys_info)}")
-
-#         # 5. Ручные заметки и ИИ-саммари
-#         if comment := u.get("comment"):
-#             user_lines.append(f"  - Comment: {comment}")
-#         if summary := u.get("summary"):
-#             user_lines.append(f"  - AI Summary: {summary}")
-
-#         formatted_users.append("\n".join(user_lines))
-
-#     header = f"=== Registered Users ({len(users)}) ==="
-#     return f"{header}\n\n" + "\n\n".join(formatted_users)
-
-
-
-
-
-# async def get_user(
-#     user_id: int | None = None,
-#     tg_id: int | None = None,
-#     username: str | None = None,
-#     db_users=None,
-#     **kwargs  # Защита от лишних аргументов LLM
-# ) -> str:
-#     """Поиск профиля пользователя по user_id (БД), tg_id или username."""
-#     if not db_users:
-#         return "Error: Database service 'db_users' is not available."
-
-#     if not user_id and not tg_id and not username:
-#         logger.warning("Attempted to call get_user without any identifier.")
-#         return "Error: Provide at least one identifier (user_id, tg_id, or username)."
-
-#     # Запрашиваем пользователя через единую функцию БД
-#     data_user = await db_users.db_get_user(user_id=user_id, tg_id=tg_id, username=username)
-
-#     if not data_user:
-#         target = f"id={user_id}" if user_id else (f"tg_id={tg_id}" if tg_id else f"username='{username}'")
-#         logger.info("User not found for %s", target)
-#         return f"User not found ({target})."
-
-#     # Извлечение полей
-#     u_id = data_user.get("id")
-#     u_tg_id = data_user.get("tg_id") or "N/A"
-#     u_uname = data_user.get("username")
-#     uname_str = f"@{u_uname}" if u_uname else "no username"
-
-#     # Флаги статуса
-#     flags = []
-#     if data_user.get("is_admin"):
-#         flags.append("ADMIN")
-#     if data_user.get("is_blocked"):
-#         flags.append("BLOCKED")
-#     if data_user.get("is_whitelisted"):
-#         flags.append("WHITELISTED")
-#     if data_user.get("is_bot"):
-#         flags.append("BOT")
-    
-#     flags_str = f" [{', '.join(flags)}]" if flags else ""
-
-#     # Дата регистрации
-#     created_at = data_user.get("created_at")
-#     if isinstance(created_at, datetime):
-#         date_str = created_at.strftime("%Y-%m-%d %H:%M")
-#     elif created_at:
-#         date_str = str(created_at)[:16]
-#     else:
-#         date_str = "no-date"
-
-#     # Формирование ответа
-#     lines = [
-#         f"=== User Profile #{u_id}{flags_str} ===",
-#         f"• TG ID: {u_tg_id} | Username: {uname_str}"
-#     ]
-
-#     if full_name := data_user.get("full_name"):
-#         lines.append(f"• Name: {full_name}")
-#     if phone := data_user.get("phone"):
-#         lines.append(f"• Phone: {phone}")
-#     if category := data_user.get("category"):
-#         lines.append(f"• Category: {category}")
-#     if lang := data_user.get("lang_code"):
-#         lines.append(f"• Lang: {lang}")
-#     if aliases := data_user.get("aliases"):
-#         lines.append(f"• Aliases: {aliases}")
-#     if comment := data_user.get("comment"):
-#         lines.append(f"• Comment: {comment}")
-#     if summary := data_user.get("summary"):
-#         lines.append(f"• AI Summary: {summary}")
-
-#     # Назначенные модели
-#     models = []
-#     if m_def := data_user.get("model_default"):
-#         models.append(f"default={m_def}")
-#     if m_cheap := data_user.get("model_cheap"):
-#         models.append(f"cheap={m_cheap}")
-#     if m_smart := data_user.get("model_smart"):
-#         models.append(f"smart={m_smart}")
-#     if models:
-#         lines.append(f"• Models: {', '.join(models)}")
-
-#     lines.append(f"• Registered: {date_str}")
-
-#     return "\n".join(lines)
-
-
-
 
 async def update_user(
     user_id: int | None = None,
@@ -641,78 +470,6 @@ async def update_user(
     changed_keys = ", ".join([k for k in update_fields.keys() if k != "aliases_vector"])
     logger.info("Successfully updated User (%s) fields: %s", target_label, changed_keys)
     return f"Success: User ({target_label}) updated. Fields changed: [{changed_keys}]."
-
-
-
-
-# async def update_user(
-#     user_id: int | None = None,
-#     tg_id: int | None = None,
-#     target_username: str | None = None,
-#     embedder=None,
-#     db_users=None,
-#     **kwargs
-# ) -> str:
-#     """Обновление профиля пользователя по одному из идентификаторов."""
-
-#     if not db_users:
-#         return "Error: Database service 'db_users' is not available."
-    
-#     user_data = {}
-#     target_label = ""
-
-#     # 1. Выбираем СТРОГО один приоритетный идентификатор для поиска
-#     if user_id:
-#         user_data["id"] = user_id
-#         target_label = f"ID #{user_id}"
-#     elif tg_id:
-#         user_data["tg_id"] = tg_id
-#         target_label = f"TG ID #{tg_id}"
-#     elif target_username:
-#         clean_target = target_username.strip().lstrip("@")
-#         user_data["username"] = clean_target
-#         target_label = f"@{clean_target}"
-#     else:
-#         logger.warning("Attempted to call update_user without any target identifier.")
-#         return "Error: Provide at least one identifier (user_id, tg_id, or target_username)."
-
-#     # 2. Исключаем ключи-идентификаторы из kwargs, чтобы AI не изменил случайно ключевые ID
-#     IDENTIFIER_KEYS = {"user_id", "tg_id", "target_username", "id"}
-    
-#     # Собираем только валидные поля для изменения
-#     update_fields = {}
-#     for key, val in kwargs.items():
-#         if key in IDENTIFIER_KEYS or val is None:
-#             continue
-        
-#         # Если меняется логин пользователя (колонка username) — зачищаем @
-#         if key == "username" and isinstance(val, str):
-#             val = val.strip().lstrip("@")
-
-#         # В схеме разделяем - user_category, в базе category
-#         if key == "user_category":
-#             key = "category"
-            
-#         update_fields[key] = val
-
-#     # 3. Проверяем, передал ли AI хоть одно поле для изменения
-#     if not update_fields:
-#         return f"Error: No fields provided to update for user ({target_label})."
-
-#     # Объединяем идентификатор и редактируемые поля в один словарь для db_update_user
-#     user_data.update(update_fields)
-
-#     # 4. Вызываем функцию БД (db_update_user возвращает True / False)
-#     success = await db_users.db_update_user(user_data)
-
-#     if not success:
-#         logger.error("Failed to update user %s", target_label)
-#         return f"Error: User '{target_label}' not found or database update failed."
-
-#     # 5. Возвращаем чёткое подтверждение для LLM
-#     changed_keys = ", ".join(update_fields.keys())
-#     logger.info("Successfully updated User (%s) fields: %s", target_label, changed_keys)
-#     return f"Success: User ({target_label}) updated. Fields changed: [{changed_keys}]."
 
 
 
@@ -1053,6 +810,244 @@ async def get_pending_queue(jumis_agent=None) -> str:
 
 
 
+
+
+
+
+##### TASKS #######
+
+async def add_task(scheduler, db_tasks, **kwargs) -> str:
+    """
+    Creates a new scheduled task in the database, notifies the scheduler, 
+    and returns a structured status report for Agent context.
+
+    Args:
+        scheduler: Instance of SmartScheduler to trigger instant timer recalculation.
+        db_tasks: Database handler instance for scheduled tasks.
+        **kwargs: Task parameters (title, agent_instruction, scheduled_at, task_type, etc.).
+
+    Returns:
+        str: Formatted string header and status message with task details.
+    """
+    header = "=== Task Creation Status ==="
+
+    if not scheduler:
+        logger.error("[add_task] SmartScheduler instance is missing or None.")
+        return f"{header}\n[CRITICAL ERROR] Scheduler instance is unavailable."
+
+    if not db_tasks:
+        logger.error("[add_task] Database handler (db_tasks) is missing or None.")
+        return f"{header}\n[CRITICAL ERROR] Database connection is unavailable."
+
+    # Filter out None values
+    task_data = {key: val for key, val in kwargs.items() if val is not None}
+
+    # Validate mandatory parameters
+    if not task_data.get("title") or not task_data.get("agent_instruction") or not task_data.get("scheduled_at"):
+        logger.warning(f"[add_task] Missing mandatory fields in payload: {task_data}")
+        return (
+            f"{header}\n"
+            f"[INVALID PARAMETERS] Task creation failed. Mandatory parameters missing: "
+            f"'title', 'agent_instruction', and 'scheduled_at' are required."
+        )
+
+    # Приводим scheduled_at к datetime объекту
+    if "scheduled_at" in task_data and isinstance(task_data["scheduled_at"], str):
+        try:
+            task_data["scheduled_at"] = datetime.fromisoformat(task_data["scheduled_at"])
+        except ValueError as e:
+            logger.error(f"[add_task] Ошибка формата даты: {e}")
+            return f"{header}\n[INVALID PARAMETERS] Неверный формат даты ISO: {task_data['scheduled_at']}"
+
+    try:
+        task_id = await db_tasks.db_add_task(task_data)
+
+        if task_id:
+            # Instantly wake up the scheduler loop to recalculate sleep timer
+            scheduler.notify_new_task()
+
+            title = task_data.get("title", "Untitled")
+            scheduled_at = task_data.get("scheduled_at", "N/A")
+            task_type = task_data.get("task_type", "reminder")
+
+            logger.info(f"[add_task] Task #{task_id} ('{title}') successfully created and scheduled for {scheduled_at}.")
+            return (
+                f"{header}\n"
+                f"[SUCCESS] Task #{task_id} successfully created and added to queue!\n"
+                f"• Task ID: {task_id}\n"
+                f"• Type: {task_type}\n"
+                f"• Title: {title}\n"
+                f"• Scheduled Time: {scheduled_at}"
+            )
+
+        logger.error(f"[add_task] DB returned no task ID for payload: {task_data}")
+        return f"{header}\n[FAILED] Unable to save the scheduled task to database."
+
+    except Exception as e:
+        logger.error(f"[add_task] Unexpected error during task creation: {e}", exc_info=True)
+        return f"{header}\n[EXCEPTION] Failed to create task due to an internal error: {e}"
+
+
+async def update_task(scheduler, db_tasks, **kwargs) -> str:
+    """
+    Updates an existing scheduled task in the database, notifies the scheduler,
+    and returns a structured status report for Agent context.
+
+    Args:
+        scheduler: Instance of SmartScheduler to trigger instant timer recalculation.
+        db_tasks: Database handler instance for scheduled tasks.
+        **kwargs: Task parameters to update (must include 'id').
+
+    Returns:
+        str: Formatted string header and status message with updated details.
+    """
+    header = "=== Task Update Status ==="
+
+    if not scheduler:
+        logger.error("[update_task] SmartScheduler instance is missing or None.")
+        return f"{header}\n[CRITICAL ERROR] Scheduler instance is unavailable."
+
+    if not db_tasks:
+        logger.error("[update_task] Database handler (db_tasks) is missing or None.")
+        return f"{header}\n[CRITICAL ERROR] Database connection is unavailable."
+
+    # Filter out None values
+    task_data = {key: val for key, val in kwargs.items() if val is not None}
+
+    task_id = task_data.get("id")
+    if not task_id:
+        logger.warning("[update_task] Update failed: missing 'id' parameter.")
+        return f"{header}\n[INVALID PARAMETERS] Task update failed. Mandatory parameter 'id' is required."
+
+    if len(task_data) <= 1:
+        logger.warning(f"[update_task] No fields to update provided for task #{task_id}.")
+        return f"{header}\n[NO CHANGES] No valid update parameters provided for task #{task_id}."
+
+    # Приводим scheduled_at к datetime объекту
+    if "scheduled_at" in task_data and isinstance(task_data["scheduled_at"], str):
+        try:
+            task_data["scheduled_at"] = datetime.fromisoformat(task_data["scheduled_at"])
+        except ValueError as e:
+            logger.error(f"[add_task] Ошибка формата даты: {e}")
+            return f"{header}\n[INVALID PARAMETERS] Неверный формат даты ISO: {task_data['scheduled_at']}"
+
+    try:
+        success = await db_tasks.db_update_task(task_data)
+
+        if success:
+            # Instantly wake up the scheduler loop to recalculate sleep timer
+            scheduler.notify_new_task()
+
+            logger.info(f"[update_task] Task #{task_id} updated successfully.")
+            
+            # Format list of updated fields for clarity
+            updated_fields = ", ".join([k for k in task_data.keys() if k != "id"])
+            return (
+                f"{header}\n"
+                f"[SUCCESS] Task #{task_id} successfully updated!\n"
+                f"• Task ID: {task_id}\n"
+                f"• Updated Fields: {updated_fields}"
+            )
+
+        logger.error(f"[update_task] DB update returned false or task #{task_id} not found.")
+        return f"{header}\n[FAILED] Task #{task_id} was not found or could not be updated."
+
+    except Exception as e:
+        logger.error(f"[update_task] Unexpected error while updating task #{task_id}: {e}", exc_info=True)
+        return f"{header}\n[EXCEPTION] Failed to update task #{task_id} due to an internal error: {e}"
+
+
+async def search_tasks(db_tasks, id: int = None, status: str = None, limit: int = 20) -> str:
+    """
+    Retrieves and formats a list of scheduled tasks based on ID or status filtering for Agent context.
+
+    Args:
+        db_tasks: Database handler instance for scheduled tasks.
+        id (int, optional): Specific task ID to search for.
+        status (str, optional): Filter by task status ('pending', 'running', 'completed', 'cancelled').
+        limit (int, optional): Maximum number of tasks to return. Defaults to 20.
+
+    Returns:
+        str: Formatted string containing the list of matching tasks or status message.
+    """
+    header_title = "=== Scheduled Tasks ==="
+
+    if not db_tasks:
+        logger.error("[search_tasks] Database handler (db_tasks) is missing or None.")
+        return f"{header_title}\n[CRITICAL ERROR] Database connection is unavailable."
+
+    try:
+        tasks: List[Dict[str, Any]] = await db_tasks.db_search_tasks(task_id=id, status=status, limit=limit)
+
+        if not tasks:
+            logger.info(f"[search_tasks] No tasks found for criteria (id={id}, status='{status}').")
+            return f"{header_title} (0)\n[NO TASKS FOUND] No tasks matched the specified criteria."
+
+        formatted_lines = []
+        for task in tasks:
+            t_id = task.get("id", "N/A")
+            t_title = task.get("title", "Untitled")
+            t_status = task.get("status", "unknown")
+            t_type = task.get("task_type", "reminder")
+            t_scheduled = task.get("scheduled_at", "N/A")
+            t_instruction = task.get("agent_instruction", "").strip()
+
+            # Truncate long instructions to keep agent context clean
+            # short_instruction = (t_instruction[:120] + "...") if len(t_instruction) > 120 else t_instruction
+
+            item = (
+                f"• Task #{t_id} | Status: [{t_status.upper()}] | Type: {t_type} | Scheduled: {t_scheduled}\n"
+                f"  Title: {t_title}\n"
+                f"  Instruction: {t_instruction}"
+            )
+            formatted_lines.append(item)
+
+        header = f"=== Scheduled Tasks List ({len(tasks)}) ==="
+        logger.info(f"[search_tasks] Successfully retrieved {len(tasks)} tasks.")
+        return f"{header}\n" + "\n\n".join(formatted_lines)
+
+    except Exception as e:
+        logger.error(f"[search_tasks] Unexpected error searching tasks: {e}", exc_info=True)
+        return f"{header_title}\n[EXCEPTION] Failed to retrieve tasks due to an internal error: {e}"
+
+
+async def del_task(id: int, db_tasks) -> str:
+    """
+    Deletes a scheduled task by its unique ID and returns a structured response for the Agent.
+
+    Args:
+        id (int): Database ID of the task to be deleted.
+        db_tasks: Database handler instance for scheduled tasks.
+
+    Returns:
+        str: Formatted string header and status message for Agent context.
+    """
+    header = "=== Task Deletion Status ==="
+
+    if not db_tasks:
+        logger.error("[del_task] Database handler (db_tasks) is missing or uninitialized.")
+        return f"{header}\n[CRITICAL ERROR] Database connection is unavailable."
+
+    try:
+        is_deleted = await db_tasks.db_del_task(id)
+
+        if is_deleted:
+            logger.info(f"[del_task] Task #{id} deleted successfully.")
+            return f"{header}\n[SUCCESS] Task #{id} has been permanently deleted from the scheduler."
+        else:
+            logger.warning(f"[del_task] Task #{id} was not found or could not be deleted.")
+            return f"{header}\n[NOT FOUND / FAILED] Task #{id} does not exist or could not be removed."
+
+    except Exception as e:
+        logger.error(f"[del_task] Unexpected error while deleting task #{id}: {e}", exc_info=True)
+        return f"{header}\n[EXCEPTION] Failed to delete task #{id} due to an internal error: {e}"
+
+
+
+
+
+
+
 FUNCTIONS = {
 
     "get_date": {
@@ -1370,6 +1365,135 @@ FUNCTIONS = {
             "type": "object",
             "properties": {},
             "required": []
+        }
+    },
+
+    # TASKS TOOLS SCHEMA FOR LLM
+
+    "add_task": {
+        "description": "Create a new scheduled task, alarm, reminder, or automated action for a user or system.",
+        "function": add_task,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "tg_id": {
+                    "type": "integer",
+                    "description": "Telegram ID of the target user. Omit or pass null for system tasks."
+                },
+                "task_type": {
+                    "type": "string",
+                    "enum": ["alarm", "reminder", "agent_action", "system_cron"],
+                    "description": "Type of task: 'alarm' (alarm clock), 'reminder' (standard notification), 'agent_action' (autonomous action/message), or 'system_cron' (background system task)."
+                },
+                "title": {
+                    "type": "string",
+                    "description": "Short title or summary of the task (e.g., 'Boxing practice', 'Nightly DB cleanup')."
+                },
+                "agent_instruction": {
+                    "type": "string",
+                    "description": "Detailed instruction for Agent Jumis on what action to execute when triggered (e.g., 'Gently remind Alex about boxing practice at 17:00. If silent, nag every 3 minutes.')."
+                },
+                "scheduled_at": {
+                    "type": "string",
+                    "description": "First or next execution timestamp in ISO 8601 format with timezone offset (e.g., '2026-09-12T17:00:00+03:00')."
+                },
+                "cron_expression": {
+                    "type": "string",
+                    "description": "Cron expression for recurring tasks (e.g., '0 2 * * *' for daily at 02:00). Pass null for one-time tasks."
+                },
+                "repeat_interval_minutes": {
+                    "type": "integer",
+                    "description": "Repeat interval in minutes for nag mode (how often to retry if unacknowledged)."
+                },
+                "requires_ack": {
+                    "type": "boolean",
+                    "description": "Whether explicit user acknowledgment (e.g., 'Got it', 'I am up') is required."
+                },
+                "max_nag_attempts": {
+                    "type": "integer",
+                    "description": "Maximum number of retry attempts in nag mode before giving up."
+                }
+            },
+            "required": ["title", "agent_instruction", "scheduled_at"]
+        }
+    },
+
+    "update_task": {
+        "description": "Update an existing task (modify scheduled time, status, instructions, or retry settings).",
+        "function": update_task,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "integer",
+                    "description": "Unique database ID of the task."
+                },
+                "title": {
+                    "type": "string",
+                    "description": "Updated short title."
+                },
+                "agent_instruction": {
+                    "type": "string",
+                    "description": "Updated system prompt/instruction for the Agent."
+                },
+                "scheduled_at": {
+                    "type": "string",
+                    "description": "Updated execution time in ISO 8601 format (e.g., '2026-09-12T18:00:00+03:00')."
+                },
+                "status": {
+                    "type": "string",
+                    "enum": ["pending", "running", "completed", "cancelled"],
+                    "description": "Updated task status."
+                },
+                "is_ack_received": {
+                    "type": "boolean",
+                    "description": "Flag indicating whether user acknowledgment was received."
+                },
+                "repeat_interval_minutes": {
+                    "type": "integer",
+                    "description": "Updated repeat interval in minutes."
+                }
+            },
+            "required": ["id"]
+        }
+    },
+
+    "search_tasks": {
+        "description": "Retrieve a list of tasks with optional filtering by ID and status.",
+        "function": search_tasks,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "integer",
+                    "description": "Filter tasks by ID TASK."
+                },
+                "status": {
+                    "type": "string",
+                    "enum": ["pending", "running", "completed", "cancelled"],
+                    "description": "Filter tasks by status (defaults to 'pending')."
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Limit the maximum number of returned tasks (default: 20)."
+                }
+            },
+            "required": []
+        }
+    },
+
+    "del_task": {
+        "description": "Delete or cancel a task by its database ID.",
+        "function": del_task,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "integer",
+                    "description": "Task ID to be deleted."
+                }
+            },
+            "required": ["id"]
         }
     }
 

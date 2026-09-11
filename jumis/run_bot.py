@@ -14,6 +14,7 @@ from database.memories import DBMemories
 from database.users import DBUsers
 from database.messages import DBMessages
 from database.tasks import DBTasks
+from scheduler.scheduler import SmartScheduler
 # from response.worker import ResponseWorker
 from jumis_agent.jumis_agent import JumisAgent
 from jsonbackup.json_backup import JsonBackup
@@ -74,6 +75,7 @@ async def main_bot() -> None:
 
     db_messages = DBMessages()
     db_tasks = DBTasks()
+    scheduler = SmartScheduler(db_tasks)
 
     # Инициализация памяти (загружает категории в кэш self)
     db_memory = DBMemories()
@@ -109,6 +111,8 @@ async def main_bot() -> None:
         db_memory=db_memory, 
         db_users=db_users, 
         db_messages=db_messages,
+        db_tasks=db_tasks,
+        scheduler=scheduler,
         mytelethon=mytelethon,
         queue_new_mess=queue_new_mess
     )
@@ -175,7 +179,8 @@ async def main_bot() -> None:
                     dp.start_polling(dp.bot, skip_updates=False),
                     mytelethon.run(),
                     ingestion_worker.run(),
-                    jumis_agent.run_queue_worker()
+                    jumis_agent.run_queue_worker(),
+                    scheduler.run()
                 )
 
             except (aiohttp.ClientConnectorError, aiohttp.ClientProxyConnectionError, ProxyError):
