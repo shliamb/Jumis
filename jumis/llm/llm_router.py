@@ -101,6 +101,10 @@ class LLMWorker:
         )
 
 
+    def set_jumis_agent(self, jumis_agent):
+        self.jumis_agent = jumis_agent
+
+
     async def get_tools_for_agent(self, function_names: list) -> list:
         """Формирует tools из self.functions с динамической подстановкой категорий"""
         tools = []

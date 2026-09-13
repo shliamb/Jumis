@@ -190,3 +190,38 @@ class DBTasks:
             logger.error(f"[DB Tasks] Ошибка при получении активной задачи: {e}", exc_info=True)
             return {}
 
+
+    async def cleanup_stale_tasks(self, expire_hours: int = 12):
+            """
+            Восстанавливает подвисшие задачи и списывает старый 'тухляк'.
+            Вызывается ОДИН РАЗ при запуске бота.
+            """
+            query = """
+                WITH reset_running AS (
+                    -- 1. Возвращаем 'running' задачи обратно в 'pending' (если бот упал в момент выполнения)
+                    UPDATE scheduled_tasks 
+                    SET status = 'pending' 
+                    WHERE status = 'running'
+                    RETURNING id
+                ),
+                expire_old AS (
+                    -- 2. Списываем просроченные задачи (старше N часов) в статус 'expired'
+                    UPDATE scheduled_tasks 
+                    SET status = 'expired' 
+                    WHERE status = 'pending' 
+                    AND scheduled_at < NOW() - (INTERVAL '1 hour' * $1)
+                    RETURNING id
+                )
+                SELECT 
+                    (SELECT COUNT(*) FROM reset_running) as reset_count,
+                    (SELECT COUNT(*) FROM expire_old) as expired_count;
+            """
+            try:
+                res = await self.db.fetchrow(query, expire_hours)
+                if res:
+                    logger.info(
+                        f"[DB Tasks] Очистка при старте: восстановлено {res['reset_count']} задач(и) из 'running', "
+                        f"списано в 'expired' {res['expired_count']} просроченных."
+                    )
+            except Exception as e:
+                logger.error(f"[DB Tasks] Ошибка при очистке старых задач: {e}", exc_info=True)

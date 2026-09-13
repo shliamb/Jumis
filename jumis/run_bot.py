@@ -95,11 +95,15 @@ async def main_bot() -> None:
 
     dp["db_users"] = db_users # для хендлера start ..
 
+
+    ####### позже у отдельный модуль перенести..
     # Инициализация очереди и сообщений
     queue_messages = asyncio.Queue()
 
-    # Инициализация очереди новых сообщений от peers для Агента Jumis
+    # Инициализация очереди новых сообщений от peers 
+    # для Агента Jumis для вывода в виде сообщения
     queue_new_mess = asyncio.Queue()
+    #######
 
     # Инициализация Telethon
     mytelethon = myTelethon(
@@ -161,8 +165,10 @@ async def main_bot() -> None:
         queue_new_mess=queue_new_mess
     )
     dp["jumis_agent"] = jumis_agent
-    # Привязываем экземпляр агента к llm (чтобы call_function мог его подставлять)
-    llm.jumis_agent = jumis_agent
+
+    llm.set_jumis_agent(jumis_agent)
+    scheduler.set_agent(jumis_agent)
+    scheduler.set_bot(dp.bot)
 
     print("Все сервисы запускаются...")
 

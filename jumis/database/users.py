@@ -223,7 +223,7 @@ class DBUsers():
 
     async def search_users(
         self,
-        user_id: Optional[int] = None,
+        username: Optional[str] = None,
         tg_id: Optional[int] = None,
         category: Optional[str] = None,
         query: Optional[str] = None,
@@ -246,14 +246,14 @@ class DBUsers():
         # -----------------------------------------------------------------
         # ШАГ 1. ТОЧНЫЙ ПОИСК ПО ИДЕНТИФИКАТОРАМ (Самый быстрый путь)
         # -----------------------------------------------------------------
-        if user_id is not None or tg_id is not None:
+        if username is not None or tg_id is not None:
             conditions = []
             params = []
             idx = 1
 
-            if user_id is not None:
-                conditions.append(f"id = ${idx}")
-                params.append(user_id)
+            if username is not None:
+                conditions.append(f"username = ${idx}")
+                params.append(username)
                 idx += 1
             elif tg_id is not None:
                 conditions.append(f"tg_id = ${idx}")

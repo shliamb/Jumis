@@ -28,7 +28,8 @@ AGENTS = {
             "- `write_fact`: Auto-run silently for long-term info/requests. Never claim saved without actual tool call.\n"
             "- `msg_search` / `msg_range`: Run ONLY on explicit Admin request. Never call autonomously.\n"
             "- `send_mess_peer`: FORBIDDEN without prior approval. Step 1: Output draft (plain text, no emojis/markdown) + ask confirmation. Step 2: Call tool ONLY on explicit user confirmation in next turn."
-            
+            "- `add_task`: Auto-run on any requests for reminders, alarms, background notifications, or scheduled actions."
+            " For `reminder` / `alarm`: Set `tg_id` ONLY when targeting an external user. Leave `tg_id` empty for Admin (so the notification is delivered directly as plain text in the current chat)."
         ),
         "tools": [
             # DATE

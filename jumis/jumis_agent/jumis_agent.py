@@ -745,13 +745,15 @@ class JumisAgent:
             message_text = None
 
             if message.content_type == "voice":
+                msg = await self.bot.send_message(self.admin_id, "🔧 STT: Transcription of audio...")
                 message_text = await self.stt.transcribe_telegram_voice(self.bot, message.voice.file_id)
+                await self.bot.delete_message(chat_id=self.admin_id, message_id=msg.message_id)
                 if not message_text:
                     await message.answer("❌ Проблемы со связью или ошибками скачивания. Попробуй ещё раз.")
                     return
 
                 MAX_LEN = 4096
-                prefix = "🎤 Распознано:\n"
+                prefix = "🎙️ "
                 max_text_len = MAX_LEN - len(prefix) - 3  
                 trimmed = message_text[:max_text_len]
                 if len(message_text) > max_text_len:

@@ -221,7 +221,7 @@ def create_tables_in_db():
             -- Тип задачи: 'alarm' (будильник), 'reminder' (напоминалка), 'agent_action' (авто-ответ/сообщение), 'system_cron' (ночная уборка)
             task_type VARCHAR(50) NOT NULL DEFAULT 'reminder',
             
-            -- Короткая суть задачи для тебя ("Тренировка в 17:00", "Будильник 12:00")
+            -- Короткая суть задачи ("Тренировка в 17:00", "Будильник 12:00")
             title VARCHAR(250) NOT NULL,
             
             -- Инструкция для Агента (System Prompt для Jumis):
@@ -243,7 +243,7 @@ def create_tables_in_db():
             max_nag_attempts INT DEFAULT 5,                     -- Сколько раз максимум "долбить" перед сдачей
             current_nag_count INT DEFAULT 0,                    -- Сколько раз уже отправил
             
-            -- Статус задачи: 'pending' (ждет времени), 'running' (в процессе), 'completed' (завершена), 'cancelled' (отменена)
+            -- Статус задачи: 'pending' (ждет времени), 'running' (в процессе), 'completed' (завершена), 'cancelled' (отменена), 'expired' (истекла)
             status VARCHAR(50) DEFAULT 'pending',
             
             created_at TIMESTAMPTZ DEFAULT NOW(),

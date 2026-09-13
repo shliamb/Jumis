@@ -475,7 +475,7 @@ async def update_user(
 
 async def search_users(
     query: str = None,
-    user_id: int = None,
+    username: str = None,
     tg_id: int = None,
     category: str = None,
     limit: int = 5,
@@ -503,7 +503,7 @@ async def search_users(
     users = await db_users.search_users(
         query=query,
         vector=vector,
-        user_id=user_id,
+        username=username,
         tg_id=tg_id,
         category=category,
         limit=limit
@@ -1011,7 +1011,7 @@ async def search_tasks(db_tasks, id: int = None, status: str = None, limit: int 
         return f"{header_title}\n[EXCEPTION] Failed to retrieve tasks due to an internal error: {e}"
 
 
-async def del_task(id: int, db_tasks) -> str:
+async def del_task(id: int, db_tasks, scheduler) -> str:
     """
     Deletes a scheduled task by its unique ID and returns a structured response for the Agent.
 
@@ -1032,6 +1032,8 @@ async def del_task(id: int, db_tasks) -> str:
         is_deleted = await db_tasks.db_del_task(id)
 
         if is_deleted:
+            # Instantly wake up the scheduler loop to recalculate sleep timer
+            scheduler.notify_new_task()
             logger.info(f"[del_task] Task #{id} deleted successfully.")
             return f"{header}\n[SUCCESS] Task #{id} has been permanently deleted from the scheduler."
         else:
@@ -1266,9 +1268,9 @@ FUNCTIONS = {
                     "type": "string",
                     "description": "Search text or phrase to match against username, full name, comments, or aliases/traits."
                 },
-                "user_id": {
-                    "type": "integer",
-                    "description": "Exact internal database primary key user ID."
+                "username": {
+                    "type": "string",
+                    "description": "Telegram username: @username."
                 },
                 "tg_id": {
                     "type": "integer",
@@ -1339,6 +1341,7 @@ FUNCTIONS = {
                     "type": "integer",
                     "description": "Telegram user ID (peer_id) of the recipient."
                 },
+                # добавить @user_name
                 "text_mess": {
                     "type": "string",
                     "description": "The exact final message text approved by the Owner. MUST be plain text only: strictly NO emojis or formatting."
@@ -1442,7 +1445,7 @@ FUNCTIONS = {
                 },
                 "status": {
                     "type": "string",
-                    "enum": ["pending", "running", "completed", "cancelled"],
+                    "enum": ["pending", "running", "completed", "expired", "cancelled"],
                     "description": "Updated task status."
                 },
                 "is_ack_received": {
@@ -1470,7 +1473,7 @@ FUNCTIONS = {
                 },
                 "status": {
                     "type": "string",
-                    "enum": ["pending", "running", "completed", "cancelled"],
+                    "enum": ["pending", "running", "completed", "expired", "cancelled"],
                     "description": "Filter tasks by status (defaults to 'pending')."
                 },
                 "limit": {
