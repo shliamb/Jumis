@@ -1222,7 +1222,7 @@ FUNCTIONS = {
             "type": "object",
             "properties": {
                 # --- Идентификаторы (нужен хотя бы один) ---
-                "user_id": {
+                "user": {
                     "type": "integer", 
                     "description": "Internal database user ID (PK)."
                 },

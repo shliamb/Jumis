@@ -1,6 +1,7 @@
 # jumis/scheduler/scheduler.py
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+from croniter import croniter
 from typing import Any, Dict, Optional
 from config import ADMIN_ID
 from logs.set_logger import set_logger
@@ -162,6 +163,13 @@ class SmartScheduler:
             t_id = task.get("id")
             task_type = task.get("task_type", "reminder")
 
+            requires_ack = task.get("requires_ack", False)
+            is_ack = task.get("is_ack_received", False)
+            current_count = task.get("current_nag_count", 0) + 1
+            max_attempts = task.get("max_nag_attempts", 5)
+            interval_min = task.get("repeat_interval_minutes") or 5
+            has_cron = bool(task.get("cron_expression"))
+
             # Получаем ID получателя с фолбэком на admin_id
             recipient_id = task.get("tg_id") or self.admin_id
 
@@ -217,17 +225,114 @@ class SmartScheduler:
                     prompt_text=prompt_to_agent
                 )
 
-                # 5. Обновляем статус ТОЛЬКО после успешного выполнения воркером
-                if task.get("cron_expression"):
-                    pass  # TODO: Перерасчет croniter
-                elif task.get("requires_ack") and not task.get("is_ack_received"):
-                    pass  # TODO: Логика «Дятла»
+                # 5. Обновляем таску ТОЛЬКО после успешного выполнения воркером
+                task_data = {}
+                now = datetime.now(timezone.utc)
+
+
+                # -------------------------------------------------------------------------
+                # ШАГ 1: Если требуется ACK и лимит повторов не исчерпан -> Режим ДЯТЛА
+                # -------------------------------------------------------------------------
+                if requires_ack and not is_ack and current_count < max_attempts:
+                    next_nag_at = now + timedelta(minutes=interval_min)
+                    logger.info(
+                        f"[AgentWorker] Дятел #{t_id}: повтор {current_count}/{max_attempts} "
+                        f"через {interval_min} мин (в {next_nag_at.strftime('%H:%M:%S')})."
+                    )
+                    task_data = {
+                        "id": t_id,
+                        "current_nag_count": current_count,
+                        "scheduled_at": next_nag_at,
+                        "status": "pending"
+                    }
+
+                # -------------------------------------------------------------------------
+                # ШАГ 2: Дятел завершён (получен ACK или исчерпаны попытки) / Обычный запуск
+                # -------------------------------------------------------------------------
                 else:
-                    await self.db_tasks.db_update_task({"id": t_id, "status": "completed"})
+                    if has_cron:
+                        # Считаем следующий запуск по Крону (например, на завтра в 01:15)
+                        next_scheduled_at = croniter(task["cron_expression"], now).get_next(datetime)
+                        logger.info(f"[AgentWorker] Крон #{t_id}: следующий запуск запланирован на {next_scheduled_at}")
+                        
+                        task_data = {
+                            "id": t_id,
+                            "scheduled_at": next_scheduled_at,
+                            "current_nag_count": 0,    # Сбрасываем счетчик дятла для следующего дня
+                            "is_ack_received": False,  # Сбрасываем флаг подтверждения
+                            "status": "pending"        # Задача живет дальше
+                        }
+                    else:
+                        # Разовая задача завершается окончательно
+                        final_status = "completed" if (is_ack or not requires_ack) else "expired"
+                        task_data = {
+                            "id": t_id,
+                            "status": final_status
+                        }
+
+                await self.db_tasks.db_update_task(task_data)
+
+                # Если задача вернулась в pending (на повтор дятла или на следующий крон-день) — пинаем петлю!
+                if task_data.get("status") == "pending":
+                    self.notify_new_task()
+
+
+                # # А) Повторяющиеся Крон-задачи
+                # if task.get("cron_expression"):
+                #     next_scheduled_at = croniter(task["cron_expression"], now).get_next(datetime)
+                #     task_data = {
+                #         "id": t_id,
+                #         "scheduled_at": next_scheduled_at,
+                #         "status": "pending"  # Оставляем живой для следующего круга
+                #     }
+
+
+                # # Б) Режим «Дятла» (требуется ACK, но подтверждения еще не было)
+                # elif task.get("requires_ack") and not task.get("is_ack_received"):
+                #     current_count = task.get("current_nag_count", 0) + 1
+                #     max_attempts = task.get("max_nag_attempts", 5)
+                #     # Страховка от 0 или None (по умолчанию каждые 5 минут)
+                #     interval_min = task.get("repeat_interval_minutes") or 5 
+
+                #     if current_count >= max_attempts:
+                #         logger.warning(
+                #             f"[AgentWorker] Задача #{t_id} ('{task.get('title')}') исчерпала лимит "
+                #             f"напоминаний ({max_attempts}/{max_attempts}). Перевод в 'expired'."
+                #         )
+                #         task_data = {
+                #             "id": t_id,
+                #             "current_nag_count": current_count,
+                #             "status": "expired"
+                #         }
+                #     else:
+                #         next_nag_at = now + timedelta(minutes=interval_min)
+                #         logger.info(
+                #             f"[AgentWorker] Дятел #{t_id}: отправлено {current_count}/{max_attempts}. "
+                #             f"Следующий повтор в {next_nag_at.strftime('%H:%M:%S')} (через {interval_min} мин)."
+                #         )
+                #         task_data = {
+                #             "id": t_id,
+                #             "current_nag_count": current_count,
+                #             "scheduled_at": next_nag_at,
+                #             "status": "pending"  # Возвращаем в очередь на следующий круг
+                #         }
+
+                # # В) Обычная разовая задача
+                # else:
+                #     task_data = {
+                #         "id": t_id, 
+                #         "status": "completed"
+                #     }
+
+                # await self.db_tasks.db_update_task(task_data)
+                # # Обязательно пинаем планировщик, если таска вернулась в pending!
+                # if task_data.get("status") == "pending":
+                #     self.notify_new_task()
 
             except Exception as e:
                 logger.error(f"[AgentWorker] Ошибка выполнения задачи #{t_id}: {e}", exc_info=True)
                 await self.db_tasks.db_update_task({"id": t_id, "status": "failed"})
+                self.notify_new_task()
             finally:
                 self.agent_queue.task_done()
 

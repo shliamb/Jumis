@@ -12,6 +12,13 @@ class DBTasks:
         self.db = db
 
 
+    async def get_tasks(self) -> list[dict]:
+        """ Все таски для бекапа"""
+        query = "SELECT * FROM scheduled_tasks ORDER BY id ASC;"
+        records = await self.db.fetch(query)
+        return [dict(rec) for rec in records] if records else []
+
+
     async def db_add_task(self, task_data: dict) -> Optional[int]:
         """ 
         Добавить задачу. 
@@ -225,3 +232,5 @@ class DBTasks:
                     )
             except Exception as e:
                 logger.error(f"[DB Tasks] Ошибка при очистке старых задач: {e}", exc_info=True)
+
+

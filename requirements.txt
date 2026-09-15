@@ -26,6 +26,10 @@ cffi==2.1.0
 pycparser==3.0
 soundfile==0.14.0
 
+# Croniter
+croniter==6.2.4
+
+
 # В ручную:
 # uv pip install kairos-asr[gpu]
 # uv pip install sentence-transformers

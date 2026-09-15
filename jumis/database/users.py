@@ -252,10 +252,12 @@ class DBUsers():
             idx = 1
 
             if username is not None:
-                conditions.append(f"username = ${idx}")
-                params.append(username)
+                clean_username = str(username).strip().lstrip('@')
+                conditions.append(f"LOWER(username) = LOWER(${idx})")
+                params.append(clean_username)
                 idx += 1
-            elif tg_id is not None:
+
+            if tg_id is not None:
                 conditions.append(f"tg_id = ${idx}")
                 params.append(tg_id)
                 idx += 1
