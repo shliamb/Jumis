@@ -4,7 +4,7 @@ import aiohttp
 # from datetime import datetime
 # import json
 from aiogram import Router
-from config import TELEGRAM_BOT_TOKEN, USE_PROXY
+from config import TELEGRAM_BOT_TOKEN, USE_PROXY, ADMIN_ID
 from proxy.socks5proxy import SOCKS5PROXY_STRINGS
 from bot_instance import AioBot
 from python_socks._errors import ProxyError
@@ -166,6 +166,28 @@ async def main_bot() -> None:
     )
     dp["jumis_agent"] = jumis_agent
 
+    
+    
+    lang_user = None
+    try:
+        user_data: list[dict] | None = await db_users.search_users(tg_id=ADMIN_ID)
+    except Exception as e:
+        #logger.warning(f"Не удалось получить lang_code для ADMIN_ID ({ADMIN_ID}): {e}")
+        print(f"Не удалось получить lang_code для ADMIN_ID ({ADMIN_ID}): {e}")
+
+    if user_data:
+        user_data = user_data[0]
+        lang_user = user_data.get("lang_code")
+
+    prompt_to_agent = (
+        f"[SYSTEM TRIGGER: STARTUP]\n"
+        f"Briefly greet the user (tg_id: {ADMIN_ID}) and confirm readiness for work.\n"
+    )
+
+    if lang_user:
+        prompt_to_agent += f"\n[USER LANGUAGE: {lang_user}]"
+
+    await jumis_agent.process_agent_request(chat_id=ADMIN_ID, prompt_text=prompt_to_agent)
     llm.set_jumis_agent(jumis_agent)
     scheduler.set_agent(jumis_agent)
     scheduler.set_bot(dp.bot)

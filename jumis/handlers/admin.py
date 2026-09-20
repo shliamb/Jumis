@@ -1,4 +1,7 @@
 #! master/handler/admin.py
+import os
+import sys
+import asyncio
 from handlers.common import typing
 from logs.set_logger import set_logger
 logger = set_logger(name="admin")
@@ -7,15 +10,12 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 # from aiogram.types import ReplyKeyboardRemove
-from config import DOWNLOAD, ADMIN_ID, PATH_LOGS
+from config import DOWNLOAD, ADMIN_ID, PATH_LOGS, DOCKER
 from database.create_tables import create_tables_in_db
 from database.deleted_tables_db import drop_all_tables_and_reset_schema
 from handlers.common import rights_verification
-import os
-import asyncio
 from pathlib import Path
 from io import BytesIO
-
 
 
 router = Router()
@@ -37,15 +37,23 @@ async def admin_menu(message: types.Message):
     admin_menu_ru = "\n".join([
         "<b>🎛 АДМИН-МЕНЮ</b>",
         "─────────────────",
-        "<b>📝 ЛОГИ:</b>",
-        "├ /logs — Скачать",
-        "└ /dLogs — Очистить",
+        "<b>📋 ЛОГИ СИСТЕМЫ:</b>",
+        "├ /logs — Скачать логи",
+        "└ /dLogs — Очистить логи",
         "",
-        "<b>📤 БЭКАП (DB ➔ JSON):</b>",
+        "<b>🤖 УПРАВЛЕНИЕ AI:</b>",
+        "├ /getMod — Список моделей",
+        "└ /setMod — Сменить модель",
+        "",
+        "<b>⚙️ БОТ И СЕРВИС:</b>",
+        "├ /reset — Перезапуск бота",
+        "└ /uplLLM — Обновить LiteLLM",
+        "",
+        "<b>📤 БЭКАП (БД ➔ JSON):</b>",
         "├ /crTabDb — Создать таблицы",
         "└ /dowjson — Скачать JSON",
         "",
-        "<b>📥 ИМПОРТ (JSON ➔ DB):</b>",
+        "<b>📥 ИМПОРТ (JSON ➔ БД):</b>",
         "├ /up_users_cat — Кат. юзеров",
         "├ /up_facts_cat — Кат. фактов",
         "├ /up_users — Юзеры",
@@ -53,16 +61,24 @@ async def admin_menu(message: types.Message):
         "├ /up_messages — Сообщения",
         "└ /up_tasks — Задачи",
         "",
-        "<b>🗑 ОПАСНО:</b>",
+        "<b>⚠️ ОПАСНАЯ ЗОНА:</b>",
         "└ /allDel — Сброс БД ☠️",
     ])
 
     admin_menu_en = "\n".join([
         "<b>🎛 ADMIN MENU</b>",
         "─────────────────",
-        "<b>📝 LOGS:</b>",
-        "├ /logs — Download",
+        "<b>📋 SYSTEM LOGS:</b>",
+        "├ /logs — Download logs",
         "└ /dLogs — Clear logs",
+        "",
+        "<b>🤖 AI MANAGEMENT:</b>",
+        "├ /getMod — List models",
+        "└ /setMod — Switch model",
+        "",
+        "<b>⚙️ BOT & SERVICE:</b>",
+        "├ /reset — Restart bot",
+        "└ /uplLLM — Update LiteLLM",
         "",
         "<b>📤 BACKUP (DB ➔ JSON):</b>",
         "├ /crTabDb — Init tables",
@@ -76,15 +92,70 @@ async def admin_menu(message: types.Message):
         "├ /up_messages — Messages",
         "└ /up_tasks — Tasks",
         "",
-        "<b>🗑 DANGER:</b>",
+        "<b>⚠️ DANGER:</b>",
         "└ /allDel — Wipe DB ☠️",
     ])
 
-    # menu_ru = "\n".join(admin_menu_ru)
-    # menu_en = "\n".join(admin_menu_en)
-
     if lang == "ru": await message.answer(admin_menu_ru, parse_mode="HTML")
     else: await message.answer(admin_menu_en, parse_mode="HTML")
+
+
+
+
+
+
+
+async def _delayed_restart(bot):
+    """Фоновая процедура корректного завершения и перезапуска."""
+    # 1. Даем 1.5 секунды, чтобы хэндлер завершился и Telegram получил ответ 200 OK
+    await asyncio.sleep(1.5)
+    
+    # 2. Мягко закрываем HTTP-сессию бота
+    try:
+        await bot.session.close()
+    except Exception as e:
+        logger.warning(f"Ошибка при закрытии сессии бота: {e}")
+
+    # 3. Разделение веток перезапуска
+    if DOCKER:
+        # Не проверял, позже проверю.. пока на горячую все..
+        logger.info("🚀 [DOCKER RESTART]: Завершаем процесс sys.exit(0)...")
+        # В Docker с политикой restart: always / unless-stopped
+        # контейнер мгновенно пересоздастся в чистом окружении
+        sys.exit(0)
+    else:
+        logger.info("💻 [LOCAL RESTART]: Подменяем процесс через os.execv...")
+        # В VS Code подменяем процесс Python прямо в текущей консоли
+        os.execv(sys.executable, [sys.executable] + sys.argv)
+
+
+# RESET SYSTEM
+@router.message(Command("reset"))
+async def reset_system(message: types.Message, bot):
+    """ Перезагрузка системы """
+    await typing(message)
+    lang = message.from_user.language_code
+    user_id = message.from_user.id
+    
+    if not await rights_verification(user_id, lang, message):
+        return
+
+    text = "🔄 *Перезапускаю систему...*" if lang == "ru" else "🔄 *Restarting system...*"
+    await message.answer(text, parse_mode="Markdown")
+
+    # Запускаем перезапуск асинхронно, чтобы не блокировать завершение хэндлера
+    asyncio.create_task(_delayed_restart(bot))
+
+
+
+
+
+
+
+
+
+
+
 
 
 # GET LOGS
@@ -157,14 +228,6 @@ async def download_json(message: types.Message, json_back):
     if not await rights_verification(user_id, lang, message): return
 
     await json_back.db_to_json()
-
-    # if create_tables_in_db(): # Синхронная
-    #     if lang == "ru": await message.answer("🎉 Таблицы в базе данных были успешно созданы")
-    #     else: await message.answer("🎉 Tables in the DB were created successfully")
-    # else:
-    #     if lang == "ru": await message.answer("🚫 Ошибка при создании таблиц базы данных. Проверьте логи для получения подробной информации")
-    #     else: await message.answer("🚫 Error creating DB tables. Check logs for details")
-
 
 
 
@@ -313,122 +376,6 @@ async def process_json_import_file(
 
 
 
-# # RESTORE TABLE in JSON file
-
-# # Объявляем группу состояний
-# class RestoreState(StatesGroup):
-#     waiting_file = State()
-
-
-# # Абстрактная функция для всех
-# async def answer_bot(message: types.Message, lang: str, name_action: str):
-#     answer_ru = (
-#         f"📥 <b>Режим восстановления таблицы {name_action}</b>\n\n"
-#         f"Отправь мне `.json` файл с бэкапом `{name_action}`.\n"
-#         "Для отмены нажми /cancel."
-#     )
-#     answer_en = (
-#         f"📥 <b>Table recovery mode {name_action}</b>\n\n"
-#         f"Send me the `.json` file with the backup `{name_action}`.\n"
-#         "To cancel, press /cancel."
-#     )
-#     answ_text = answer_ru if lang == "ru" else answer_en
-#     await message.answer(answ_text)
-
-
-# # Нажатие /up_tasks — включаем режим ожидания файла
-# @router.message(Command("up_tasks"))
-# async def cmd_up_tasks(message: types.Message, state: FSMContext):
-#     name_action="06_tasks"
-#     await state.update_data(name_action=name_action)
-#     await state.set_state(RestoreState.waiting_file)
-#     await answer_bot(
-#         message, 
-#         lang=message.from_user.language_code, 
-#         name_action=name_action
-#     )
-
-
-# # Нажатие /up_users_cat — включаем режим ожидания файла
-# @router.message(Command("up_users_cat"))
-# async def cmd_up_users_cat(message: types.Message, state: FSMContext):
-#     name_action="01_user_categories"
-#     await state.update_data(name_action=name_action)
-#     await state.set_state(RestoreState.waiting_file)
-#     await answer_bot(
-#         message, 
-#         lang=message.from_user.language_code, 
-#         name_action=name_action
-#     )
-
-# ...
-
-
-# # Отмена, если передумал
-# @router.message(Command("cancel"), RestoreState.waiting_file)
-# async def cancel_restore(message: types.Message, state: FSMContext):
-#     await state.clear()
-#     await message.answer("❌ Восстановление отменено.")
-
-
-# # Ловим файл, ПОКА находимся в состоянии waiting_file
-# @router.message(RestoreState.waiting_file, F.document)
-# async def process_tasks_json_file(
-#     message: types.Message, 
-#     state: FSMContext, 
-#     bot, 
-#     json_back
-# ):
-#     lang=message.from_user.language_code
-#     document = message.document
-#     send_data = await state.get_data()
-#     name_action = send_data.get("name_action")
-#     os.makedirs(DOWNLOAD, exist_ok=True)
-
-#     # Проверка расширения файла
-#     if not document or not document.file_name.endswith('.json'):
-#         if lang == "ru": await message.answer("🚫 Прикрепите JSON файл пользователей")
-#         else: await message.answer("🚫 Attach a JSON file users")
-#         return
-
-#     # Скачиваем файл во временную директорию
-#     filename = os.path.join(DOWNLOAD, document.file_name)
-#     filepath = os.path.join(os.getcwd(), filename)
-#     await message.bot.download(document, destination=filepath)
-
-#     await message.answer("⏳ Обрабатываю и загружаю данные в БД...")
-
-#     # Запускаем наш метод восстановления
-#     success, good_count, bad_count = await json_back.restore_tasks_from_file(name_action, filepath)
-
-#     # Удаляем временный файл
-#     if os.path.exists(filepath):
-#         os.remove(filepath)
-
-#     # Сбрасываем состояние FSM!
-#     await state.clear()
-
-#     # Разложить на lang
-#     if success:
-#         await message.answer(f"🎉 <b>Успешно!</b> Загружено записей {name_action} в BD: <code>{good_count}</code>.")
-#     else:
-#         await message.answer(f"🚫 <b>Ошибка загрузки {name_action} в BD: Из них успешно: {good_count}, с ошибкой: {bad_count}/b>")
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-        
-
 # FAST DELETING all TABLES in DB
 @router.message(Command('allDel'))
 async def delete_all_tables_in_db_admin(message: types.Message):
@@ -471,20 +418,6 @@ async def admin_clear_logs(message: types.Message):
                 logger.error(f"Error clearing file log: {file_path}: {e}")
                 if lang == "ru": await message.answer("🚫 Ошибка при удалении логов")
                 else: await message.answer("🚫 Error deleting logs")
-
-
-# # CLEAR MEMORIES
-# @router.message(Command("dMem"))
-# async def push_clear_memories(message: types.Message):
-#     """ Очищение Воспоминаний Агента """
-#     await typing(message)
-#     lang = message.from_user.language_code
-#     user_id = message.from_user.id
-
-#     if not await rights_verification(user_id, lang, message): return
-
-#     conf = await clear_memories()
-#     await message.answer(conf)
 
 
 

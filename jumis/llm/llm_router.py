@@ -14,7 +14,7 @@ from llm.agents import AGENTS
 from llm.functions import FUNCTIONS
 from config import HISTORY_LIMIT
 from llm.token_usege import DBTokenLogger
-from config import LLM_TIMEOUT
+from config import LLM_TIMEOUT, DEFAULT_FALLBACK_MODEL
 
 from logs.set_logger import set_logger
 
@@ -45,7 +45,8 @@ class LLMWorker:
         # "anthropic/claude-sonnet-4-5-20250929"
         # "gpt-5"
         # "xai/grok-3-latest"
-        self.default_model = "deepseek/deepseek-v4-flash" # "gemini/gemini-2.5-flash"
+
+        self.default_model = DEFAULT_FALLBACK_MODEL  # or
         self.old_dialog: List[Dict[str, Any]] = []
         self.dialog: List[Dict[str, Any]] = []
         self.history_limit = HISTORY_LIMIT
