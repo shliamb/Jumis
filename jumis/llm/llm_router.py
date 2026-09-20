@@ -588,7 +588,8 @@ class LLMWorker:
                 yield {'type': 'text', 'content': delta.content}
 
             # 2. Функции - надежное накопление по index чанка
-            if delta.tool_calls:
+            #if delta.tool_calls:
+            if getattr(delta, "tool_calls", None):
                 for tool_call in delta.tool_calls:
                     idx = tool_call.index
                     if idx not in tool_calls_buffer:

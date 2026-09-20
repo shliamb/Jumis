@@ -1403,19 +1403,20 @@ FUNCTIONS = {
                 "cron_expression": {
                     "type": "string",
                     "description": "Cron expression for recurring tasks (e.g., '0 2 * * *' for daily at 02:00). Pass null for one-time tasks."
-                },
-                "repeat_interval_minutes": {
-                    "type": "integer",
-                    "description": "Repeat interval in minutes for nag mode (how often to retry if unacknowledged)."
-                },
-                "requires_ack": {
-                    "type": "boolean",
-                    "description": "Whether explicit user acknowledgment (e.g., 'Got it', 'I am up') is required."
-                },
-                "max_nag_attempts": {
-                    "type": "integer",
-                    "description": "Maximum number of retry attempts in nag mode before giving up."
                 }
+                #,
+                # "repeat_interval_minutes": {
+                #     "type": "integer",
+                #     "description": "Repeat interval in minutes for nag mode (how often to retry if unacknowledged)."
+                # },
+                # "requires_ack": {
+                #     "type": "boolean",
+                #     "description": "Whether explicit user acknowledgment (e.g., 'Got it', 'I am up') is required."
+                # },
+                # "max_nag_attempts": {
+                #     "type": "integer",
+                #     "description": "Maximum number of retry attempts in nag mode before giving up."
+                # }
             },
             "required": ["title", "agent_instruction", "scheduled_at"]
         }
@@ -1447,15 +1448,16 @@ FUNCTIONS = {
                     "type": "string",
                     "enum": ["pending", "running", "completed", "expired", "cancelled"],
                     "description": "Updated task status."
-                },
-                "is_ack_received": {
-                    "type": "boolean",
-                    "description": "Flag indicating whether user acknowledgment was received."
-                },
-                "repeat_interval_minutes": {
-                    "type": "integer",
-                    "description": "Updated repeat interval in minutes."
                 }
+                #,
+                # "is_ack_received": {
+                #     "type": "boolean",
+                #     "description": "Flag indicating whether user acknowledgment was received."
+                # },
+                # "repeat_interval_minutes": {
+                #     "type": "integer",
+                #     "description": "Updated repeat interval in minutes."
+                # }
             },
             "required": ["id"]
         }
