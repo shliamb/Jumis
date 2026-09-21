@@ -1,4 +1,4 @@
-#! jumis/llm/llm_router.py (или deepseek.py)
+#! jumis/llm/llm_router.py
 import os
 import copy
 import asyncio
@@ -20,8 +20,6 @@ from logs.set_logger import set_logger
 
 logger = set_logger(name="llm")
 
-# Подгружаем переменные окружения
-load_dotenv('.env.llm')
 
 # Инициализируем глобальные настройки LiteLLM один раз при импорте модуля
 litellm.cache = litellm.Cache(type="local")  # Включаем локальный в памяти (In-Memory) кэш
@@ -34,42 +32,162 @@ litellm.callbacks = [DBTokenLogger()]       # Регистрируем клас�
 
 
 class LLMWorker:
-    def __init__(self, db_memory, db_users, db_messages, db_tasks, scheduler, mytelethon, queue_new_mess):
-        ''' Экземпляр работы с LLM через litellm '''
+    ''' Экземпляр работы с LLM через litellm '''
+
+    # Маппинг: Ключ в .env -> Родной `litellm_provider` из метаданных LiteLLM
+    ENV_PROVIDER_MAP = {
+        "OPENAI_API_KEY": "openai",
+        "ANTHROPIC_API_KEY": "anthropic",
+        "DEEPSEEK_API_KEY": "deepseek",
+        "GEMINI_API_KEY": "gemini",
+        "XAI_API_KEY": "xai",
+    }
+
+    # Исключаем только прокси-шлюзы, если их модели пролезают под видом родных
+    BLOCKED_PREFIXES = (
+        "openrouter/", "vercel_ai_gateway/", "deepinfra/", "cloudflare/",
+        "databricks/", "groq/", "bedrock/", "vertex_ai/", "azure/", "together_ai/"
+    )
+
+
+    def __init__(
+            self, 
+            db_memory, 
+            db_users, 
+            db_messages, 
+            db_tasks, 
+            scheduler, 
+            mytelethon, 
+            queue_new_mess
+        ):
+
+        load_dotenv('.env.llm')
         
         # Проверяем наличие ключей в окружении (не вызовет KeyError, если какого-то ключа пока нет)
         self._check_env_keys()
 
-        # "deepseek/deepseek-v4-flash"
-        # "gemini/gemini-2.5-flash"
-        # "anthropic/claude-sonnet-4-5-20250929"
-        # "gpt-5"
-        # "xai/grok-3-latest"
+        # LiteLLM MODELS
+        self.active_providers: set[str] = self._get_active_providers()
+        self.available_models: list[str] = []
+        self.model_prices: dict[str, dict] = {}
+        self.model_default = DEFAULT_FALLBACK_MODEL
+        # self.model_cheap = 
+        # self.model_smart = 
 
-        self.default_model = DEFAULT_FALLBACK_MODEL  # or
+        # Инициализируем данные при старте
+        self.refresh_catalog()
+        
+        # AGENT 
+        self.jumis_agent = None
         self.old_dialog: List[Dict[str, Any]] = []
         self.dialog: List[Dict[str, Any]] = []
         self.history_limit = HISTORY_LIMIT
-        self.functions = FUNCTIONS
         self.agents = AGENTS
+        self.functions = FUNCTIONS
         self.llm_timeout = LLM_TIMEOUT
 
+        # SERVICE DB
         self.db_memory = db_memory
         self.db_users = db_users
         self.db_messages = db_messages
         self.db_tasks=db_tasks
         self.scheduler=scheduler
+
+        # TELETHON & QUEUE
         self.mytelethon = mytelethon
         self.queue_new_mess = queue_new_mess
-        self.jumis_agent = None
+
+
+    def _get_active_providers(self) -> set[str]:
+        """Определяет активные провайдеры по наличию API-ключей в .env"""
+        active = set()
+        for env_key, provider_name in self.ENV_PROVIDER_MAP.items():
+            key_val = os.getenv(env_key)
+            if key_val and key_val.strip():
+                active.add(provider_name)
+        return active
 
 
     def _check_env_keys(self):
         """ Безопасная проверка загрузки API-ключей из .env """
+        # Подгружаем переменные окружения
         required_keys = ["DEEPSEEK_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "XAI_API_KEY"]
         missing = [key for key in required_keys if not os.getenv(key)]
         if missing:
             print(f"⚠️ [LLMWorker Warning] Следующие ключи не найдены в .env.llm: {', '.join(missing)}")
+
+
+
+    def _get_active_providers(self) -> set[str]:
+        """Определяет активные провайдеры по наличию API-ключей в .env"""
+        active = set()
+        for env_key, provider_name in self.ENV_PROVIDER_MAP.items():
+            key_val = os.getenv(env_key)
+            if key_val and key_val.strip():
+                active.add(provider_name)
+        return active
+
+
+    def refresh_catalog(self) -> None:
+        """
+        Сканирует реестр LiteLLM и формирует список доступных чат-моделей 
+        и словарь их цен на основе активных API-ключей.
+        """
+        self.active_providers = self._get_active_providers()
+        
+        if not self.active_providers:
+            self.available_models = []
+            self.model_prices = {}
+            return
+
+        clean_models = set()
+        prices = {}
+
+        # Работаем напрямую со структурированной базой моделей LiteLLM
+        for model_name, meta in litellm.model_cost.items():
+            model_lower = model_name.lower()
+
+            # 1. Отбрасываем сторонние прокси-шлюзы
+            if any(model_lower.startswith(bp) for bp in self.BLOCKED_PREFIXES):
+                continue
+
+            # 2. Оставляем ТОЛЬКО текстовые/чат модели (автоматически убирает tts, whisper, embed, sora)
+            mode = meta.get("mode")
+            if mode != "chat":
+                continue
+
+            # 3. Проверяем, принадлежит ли модель одному из наших активных провайдеров
+            provider = meta.get("litellm_provider")
+            if provider not in self.active_providers:
+                continue
+
+            # 4. Фильтруем редкий мусор или алиасы со специальными символами
+            if ":" in model_name or "anthropic." in model_lower:
+                continue
+
+            # Сохраняем модель
+            clean_models.add(model_name)
+
+            # Сохраняем ценовую информацию
+            prices[model_name] = {
+                "input_cost_per_token": meta.get("input_cost_per_token", 0.0),
+                "output_cost_per_token": meta.get("output_cost_per_token", 0.0),
+                "max_tokens": meta.get("max_tokens"),
+                "max_input_tokens": meta.get("max_input_tokens"),
+                "max_output_tokens": meta.get("max_output_tokens"),
+                "provider": provider,
+            }
+
+        self.available_models = sorted(list(clean_models))
+        self.model_prices = prices
+
+    def get_model_cost_info(self, model_name: str) -> dict:
+        """Утилита для быстрого получения цены конкретной модели"""
+        return self.model_prices.get(model_name, {
+            "input_cost_per_token": 0.0,
+            "output_cost_per_token": 0.0,
+            "provider": "unknown"
+        })
 
 
 
@@ -335,7 +453,7 @@ class LLMWorker:
             async def stream_wrapper():
                 try:
                     response = await acompletion(
-                        model=self.default_model,
+                        model=self.model_default,
                         messages=temp_messages,
                         tools=tools,
                         stream=True,
@@ -372,7 +490,7 @@ class LLMWorker:
         # 3. ЕСЛИ ОБЫЧНЫЙ ВЫЗОВ (без стриминга)
         try:
             response = await acompletion(
-                model=self.default_model,
+                model=self.model_default,
                 messages=temp_messages,
                 tools=tools,
                 stream=False,

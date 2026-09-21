@@ -2,6 +2,27 @@ import os
 from dotenv import load_dotenv
 
 
+# =====================================================================
+# TIMEZONE & TIME MANAGEMENT ARCHITECTURE / АРХИТЕКТУРА ВРЕМЕНИ
+# =====================================================================
+#
+# RU:
+# 1. База данных (docker-compose.yml): Задайте `TZ` (напр. TZ=Europe/Moscow).
+#    PostgreSQL будет генерировать правильное локальное время для NOW().
+# 2. Приложение (config.py): Переменная `TIME_ZONE` управляет временем Python.
+#    Если сервер в другой часовой зоне — укажите здесь нужную зону.
+# 3. Принцип: Код переводит всё в целевую зону и сдирает `tzinfo` (.replace(tzinfo=None)).
+#    Вся система работает строго на чистом настенном времени (naive datetime).
+#
+# EN:
+# 1. Database (docker-compose.yml): Set `TZ` env (e.g. TZ=Europe/Moscow).
+#    PostgreSQL will generate the correct local wall-clock time for NOW().
+# 2. Application (config.py): `TIME_ZONE` controls Python wall-clock time.
+#    If server physical location differs, set target timezone here.
+# 3. Concept: All datetimes are converted to `TIME_ZONE` and stripped of tzinfo.
+#    The entire app operates strictly on clean naive wall-clock datetimes.
+# =====================================================================
+
 
 #### BASIC CONFIG (set it up manually): ####
 
@@ -12,8 +33,8 @@ LOG_TO_FILE = False
 HOST = "127.0.0.1" if DOCKER else  "localhost" # app_postgres localhost
 PORT = 5432 if DOCKER else 15433  # В докере стучимся на внешний порт, локально — на стандартный
 MAX_SIZE_DOC = 2 # 2 мегабайт
-TIME_CORRECTION = + 3
-TIME_ZONE = 'Europe/Moscow'
+# TIME_ZONE = 'Europe/Moscow' # +03:00
+TIME_ZONE = "UTC"  # или "Etc/UTC" +00:00
 ERR_PROXY_LIMIT = 3
 
 
@@ -35,7 +56,7 @@ BUFFER_IDLE_SEC: int = 30  # Пауза молчания (в сек) перед 
 #### LLMs: ####
 
 # DeepSeek:
-DEFAULT_FALLBACK_MODEL = "deepseek/deepseek-v4-flash"
+DEFAULT_FALLBACK_MODEL = "deepseek/deepseek-v4-flash" # "gemini/gemini-3.5-flash-lite"
 LLM_TIMEOUT = 30
 HISTORY_LIMIT = 30
 """ 10–15 Строгие узкие ассистенты (только выполнить команду и дать ответ).

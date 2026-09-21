@@ -60,6 +60,28 @@ async def init_router() -> None:
     dp.include_router(main_router)
 
 
+async def send_startup_greeting(db_users, jumis_agent):
+    """Отправка стартового приветствия администратору."""
+    await asyncio.sleep(2)  # Пауза для инициализации воркеров
+
+    lang_user = "en"
+    try:
+        user_data = await db_users.search_users(tg_id=ADMIN_ID)
+        if user_data:
+            lang_user = user_data[0].get("lang_code")
+    except Exception as e:
+        print(f"Не удалось получить lang_code для ADMIN_ID ({ADMIN_ID}): {e}")
+
+    prompt_to_agent = (
+        f"[SYSTEM TRIGGER: STARTUP]\n"
+        f"Briefly greet the user (tg_id: {ADMIN_ID}) and confirm readiness for work.\n"
+    )
+    if lang_user:
+        prompt_to_agent += f"\n[USER LANGUAGE: {lang_user}]"
+
+    await jumis_agent.process_agent_request(chat_id=ADMIN_ID, prompt_text=prompt_to_agent)
+
+
 
 
 
@@ -166,33 +188,14 @@ async def main_bot() -> None:
     )
     dp["jumis_agent"] = jumis_agent
 
-    
-    
-    lang_user = None
-    try:
-        user_data: list[dict] | None = await db_users.search_users(tg_id=ADMIN_ID)
-    except Exception as e:
-        #logger.warning(f"Не удалось получить lang_code для ADMIN_ID ({ADMIN_ID}): {e}")
-        print(f"Не удалось получить lang_code для ADMIN_ID ({ADMIN_ID}): {e}")
-
-    if user_data:
-        user_data = user_data[0]
-        lang_user = user_data.get("lang_code")
-
-    prompt_to_agent = (
-        f"[SYSTEM TRIGGER: STARTUP]\n"
-        f"Briefly greet the user (tg_id: {ADMIN_ID}) and confirm readiness for work.\n"
-    )
-
-    if lang_user:
-        prompt_to_agent += f"\n[USER LANGUAGE: {lang_user}]"
-
-    await jumis_agent.process_agent_request(chat_id=ADMIN_ID, prompt_text=prompt_to_agent)
     llm.set_jumis_agent(jumis_agent)
     scheduler.set_agent(jumis_agent)
     scheduler.set_bot(dp.bot)
 
     print("Все сервисы запускаются...")
+
+    # Флаг для однократного запуска приветствия (защита от реконнектов)
+    is_first_start = True
 
     try:
         while True:
@@ -202,7 +205,15 @@ async def main_bot() -> None:
                     await asyncio.sleep(5)
                     continue
 
-                # asyncio.gather сам обернет их в таски и запустит параллельно
+                # Запускаем приветствие как неблокирующую фоновую задачу
+                # Только при САМОМ ПЕРВОМ успешном входе в рабочий цикл
+                if is_first_start:
+                    asyncio.create_task(
+                        send_startup_greeting(db_users, jumis_agent)
+                    )
+                    is_first_start = False
+
+                # Запуск сервисов в фоне: держит выполнение, а при сбое любого — уходит на перезапуск.
                 await asyncio.gather(
                     dp.start_polling(dp.bot, skip_updates=False),
                     mytelethon.run(),
@@ -217,12 +228,14 @@ async def main_bot() -> None:
                 await bot_instance.reconnect()
                 dp.bot = bot_instance.bot
                 await asyncio.sleep(5)
+
             except Exception as e:
                 # Перепроверить позже, чую там пизда..
                 print(f"Другая ошибка: {e}")
                 await bot_instance.reconnect()
                 dp.bot = bot_instance.bot
                 await asyncio.sleep(5)
+
             except asyncio.CancelledError:
                 print("📢 Бот получил сигнал остановки")
                 raise

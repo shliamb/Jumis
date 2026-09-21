@@ -1,11 +1,11 @@
 # master/telethoner/mytelethon.py
 import asyncio
-import datetime
-import time
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from urllib.parse import urlparse
 from telethon import TelegramClient, events, connection, types
 
-from config import API_ID, API_HASH, USE_MTPROTO, ERR_PROXY_LIMIT
+from config import API_ID, API_HASH, USE_MTPROTO, ERR_PROXY_LIMIT, TIME_ZONE
 from proxy.mtprotoproxy import MTPROXY_STRINGS
 from logs.set_logger import set_logger
 
@@ -247,12 +247,26 @@ class myTelethon:
             media_info = await self.detect_media_info(event)
 
             # 7. Полный пакет данных сообщения
+            app_tz = ZoneInfo(TIME_ZONE)
+            # Извлекаем дату из события Telethon
+            raw_date = getattr(event, "date", None)
+
+            if isinstance(raw_date, datetime):
+                if raw_date.tzinfo is not None:
+                    # Переводим из UTC в цифры твоего пояса и сдираем плашку тайм-зоны
+                    created_at = raw_date.astimezone(app_tz).replace(tzinfo=None)
+                else:
+                    created_at = raw_date
+            else:
+                # Если даты не было — берём текущее настенное время
+                created_at = datetime.now(app_tz).replace(tzinfo=None)
+
             message_payload = {
                 "tg_msg_id": event.id,
                 "chat_id": event.chat_id,  # Уникальный ID чата/собеседника
                 "is_outgoing": event.out,
                 "content": event.raw_text or "",
-                "created_at": event.date,  # datetime с tz=UTC (подходит под TIMESTAMPTZ)
+                "created_at": created_at,  # Чистые настенные цифры без tzinfo
                 **media_info,  # Подмешивает msg_type, media_file_id, media_name
             }
 

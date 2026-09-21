@@ -147,6 +147,77 @@ async def reset_system(message: types.Message, bot):
     asyncio.create_task(_delayed_restart(bot))
 
 
+# UPDATE LiteLLM & ML Stack via UV
+@router.message(Command("uplLLM"))
+async def update_litellm(message: types.Message):
+    """ Комплексное обновление LiteLLM и ML-зависимостей """
+    await typing(message)
+    lang = message.from_user.language_code
+    user_id = message.from_user.id
+    
+    if not await rights_verification(user_id, lang, message):
+        return
+
+    start_text = "⏳ *Обновляю LiteLLM и ML-стек через uv...*" if lang == "ru" else "⏳ *Updating LiteLLM & ML stack via uv...*"
+    status_msg = await message.answer(start_text, parse_mode="Markdown")
+
+    try:
+        # # Обновляем всю связку единым резолвером
+        # process = await asyncio.create_subprocess_exec(
+        #     "uv", "pip", "install", "--upgrade",
+        #     "litellm",
+        #     "huggingface_hub",
+        #     "transformers",
+        #     "tokenizers",
+        #     "sentence-transformers",
+        #     stdout=asyncio.subprocess.PIPE,
+        #     stderr=asyncio.subprocess.PIPE
+        # )
+
+        # Обновляем ТОЛЬКО LiteLLM, не прикасаясь к тяжелым зависимостям вектора
+        process = await asyncio.create_subprocess_exec(
+            "uv", "pip", "install", "--upgrade", "litellm", "--no-deps",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        
+        stdout, stderr = await process.communicate()
+
+        if process.returncode == 0:
+            success_text = (
+                "⚡️ *LiteLLM и ML-зависимости успешно обновлены!*\n\n"
+                "Выполните /reset, чтобы перезапустить бота."
+            ) if lang == "ru" else (
+                "⚡️ *LiteLLM & ML stack successfully updated!*\n\n"
+                "Run /reset to restart the bot."
+            )
+            await status_msg.edit_text(success_text, parse_mode="Markdown")
+        else:
+            err_output = stderr.decode().strip() or stdout.decode().strip()
+            short_err = "\n".join(err_output.splitlines()[-4:])
+            
+            fail_text = (
+                f"❌ *Ошибка uv pip:*\n```\n{short_err}\n```"
+            ) if lang == "ru" else (
+                f"❌ *uv pip error:*\n```\n{short_err}\n```"
+            )
+            await status_msg.edit_text(fail_text, parse_mode="Markdown")
+
+    except FileNotFoundError:
+        err_msg = (
+            "❌ *Ошибка:* Команда `uv` не найдена в системе." 
+            if lang == "ru" else 
+            "❌ *Error:* `uv` command not found in PATH."
+        )
+        await status_msg.edit_text(err_msg, parse_mode="Markdown")
+    except Exception as e:
+        logger.error(f"Сбой при обновлении пакетов через uv: {e}")
+        err_msg = f"❌ *Сбой выполнения:* `{e}`" if lang == "ru" else f"❌ *Execution failure:* `{e}`"
+        await status_msg.edit_text(err_msg, parse_mode="Markdown")
+
+
+
+
 
 
 

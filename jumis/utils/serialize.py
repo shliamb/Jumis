@@ -16,7 +16,7 @@ def json_serializer(obj):
         return str(obj)  # или float(obj) если допустимо
     
     elif isinstance(obj, datetime):
-        return obj.isoformat()
+        return obj.replace(tzinfo=None).isoformat()
     
     elif isinstance(obj, UUID):
         return str(obj)
@@ -47,7 +47,7 @@ def json_decoder(value):
     # Datetime (ISO 8601)
     if 'T' in value or re.match(r'\d{4}-\d{2}-\d{2}', value):
         try:
-            return datetime.fromisoformat(value)
+            return datetime.fromisoformat(value).replace(tzinfo=None)
         except ValueError as e:
             logger.warning(f"Failed to parse datetime for key '{value}': {e}")
             return value
@@ -84,7 +84,7 @@ def custom_json_decoder(dct: dict):
         # Datetime (ISO 8601)
         if 'T' in value or re.match(r'\d{4}-\d{2}-\d{2}', value):
             try:
-                dct[key] = datetime.fromisoformat(value)
+                dct[key] = datetime.fromisoformat(value).replace(tzinfo=None)
                 continue
             except ValueError as e:
                 logger.warning(f"Failed to parse datetime for key '{key}': {e}")
@@ -112,7 +112,7 @@ def custom_json_decoder(dct: dict):
 def serialize_for_json(obj):
     """Рекурсивно преобразует datetime, date, UUID, Decimal в строки для JSON"""
     if isinstance(obj, (datetime, date)):
-        return obj.isoformat()
+        return obj.replace(tzinfo=None).isoformat()
     if isinstance(obj, UUID):
         return str(obj)
     if isinstance(obj, Decimal):
@@ -134,7 +134,7 @@ def deserialize_from_json(obj):
         return [deserialize_from_json(v) for v in obj]
     if isinstance(obj, str):
         try:
-            return datetime.fromisoformat(obj)
+            return datetime.fromisoformat(obj).replace(tzinfo=None)
         except ValueError:
             pass
         try:

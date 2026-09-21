@@ -230,7 +230,7 @@ def create_tables_in_db():
             agent_instruction TEXT NOT NULL,
             
             -- Время следующего/первого запуска
-            scheduled_at TIMESTAMP WITH TIME ZONE NOT NULL,
+            scheduled_at TIMESTAMP NOT NULL,
             
             -- Повторения и Крон:
             -- cron_expression: '0 2 * * *' (каждую ночь в 2:00) или NULL для разовых задач

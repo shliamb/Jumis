@@ -6,6 +6,8 @@ logger = set_logger(name="admin")
 from aiogram.filters import CommandStart
 from aiogram import Router, types, F
 from datetime import datetime
+from zoneinfo import ZoneInfo
+from config import TIME_ZONE
 from handlers.common import rights_verification
 
 # from aiogram.types import Message
@@ -14,6 +16,8 @@ from handlers.common import rights_verification
 
 
 router = Router()
+
+
 
 
 
@@ -71,12 +75,14 @@ async def start_router(message: types.Message, db_users):
         return
 
     # 4. Формирование данных и запись нового пользователя
+    app_tz = ZoneInfo(TIME_ZONE)
+    now = datetime.now(app_tz)
     new_user_data = {
         "tg_id": user_id,
         "full_name": full_name,
         "lang_code": lang,
         "is_admin": True,
-        "created_at": datetime.now(),
+        "created_at": now,
     }
 
     if await db_users.add_user(new_user_data):

@@ -3,11 +3,14 @@ import asyncio
 from typing import Any, Dict, List, Optional
 from vector import embedder
 from utils.common import sanitize_human_text
-from datetime import datetime, timezone
-from config import ADMIN_ID
+from datetime import datetime
+from zoneinfo import ZoneInfo
+from config import ADMIN_ID, TIME_ZONE
 from logs.set_logger import set_logger
 logger = set_logger(name="llmfunc")
 import json
+
+
 
 
 
@@ -17,11 +20,10 @@ background_tasks = set()
 
 ########## DATE ###############
 
-async def get_date():
-    """ Получение даты """
-    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
- 
-
+async def get_date() -> str:
+    """Получение текущей даты и времени по настенным часам из TIME_ZONE."""
+    app_tz = ZoneInfo(TIME_ZONE)
+    return datetime.now(app_tz).strftime("%Y-%m-%d %H:%M:%S")
 
 ###### MEMORIES ##########
 
@@ -756,12 +758,27 @@ async def send_mess_peer(peer_id: int, text_mess: str, mytelethon, queue_new_mes
             return f"Error sending message to {peer_id}: {answer}"
 
         # 2. Успешно отправлено — извлекаем tg_msg_id и дату
+        app_tz = ZoneInfo(TIME_ZONE)
+
         if isinstance(answer, int):
             tg_msg_id = answer
-            created_at = datetime.now(timezone.utc)
+            created_at = datetime.now(app_tz).replace(tzinfo=None)
         else:
             tg_msg_id = getattr(answer, "id", None)
-            created_at = getattr(answer, "date", datetime.now(timezone.utc))
+            raw_date = getattr(answer, "date", None)
+            
+            # Проверяем, что raw_date — это реально дата, а не число или None
+            if isinstance(raw_date, datetime):
+                if raw_date.tzinfo is not None:
+                    # Переводим из UTC в Москву и сдираем плашку тайм-зоны
+                    created_at = raw_date.astimezone(app_tz).replace(tzinfo=None)
+                else:
+                    # Если дата уже без тайм-зоны, оставляем как есть
+                    created_at = raw_date
+            else:
+                # Если там был None или число — берем текущие московские цифры
+                created_at = datetime.now(app_tz).replace(tzinfo=None)
+
 
         # 3. Формируем таск для воркера/JumisAgent
         task_payload = {
@@ -869,6 +886,7 @@ async def add_task(scheduler, db_tasks, **kwargs) -> str:
             title = task_data.get("title", "Untitled")
             scheduled_at = task_data.get("scheduled_at", "N/A")
             task_type = task_data.get("task_type", "reminder")
+            cron_expression = task_data.get("cron_expression", "N/A")
 
             logger.info(f"[add_task] Task #{task_id} ('{title}') successfully created and scheduled for {scheduled_at}.")
             return (
@@ -878,6 +896,7 @@ async def add_task(scheduler, db_tasks, **kwargs) -> str:
                 f"• Type: {task_type}\n"
                 f"• Title: {title}\n"
                 f"• Scheduled Time: {scheduled_at}"
+                f"• Cron_expression: {cron_expression}"
             )
 
         logger.error(f"[add_task] DB returned no task ID for payload: {task_data}")
@@ -1398,11 +1417,11 @@ FUNCTIONS = {
                 },
                 "scheduled_at": {
                     "type": "string",
-                    "description": "First or next execution timestamp in ISO 8601 format with timezone offset (e.g., '2026-09-12T17:00:00+03:00')."
+                    "description": "Execution timestamp in ISO format WITHOUT timezone offset (e.g., '2026-09-12T17:00:00'). Use exact local wall-clock time."
                 },
                 "cron_expression": {
                     "type": "string",
-                    "description": "Cron expression for recurring tasks (e.g., '0 2 * * *' for daily at 02:00). Pass null for one-time tasks."
+                    "description": "Cron expression for recurring tasks (e.g., '0 2 * * *' for daily at 02:00). CRITICAL: Write hours and minutes in exact LOCAL time. DO NOT convert hours to UTC. Pass null for one-time tasks."
                 }
                 #,
                 # "repeat_interval_minutes": {
@@ -1442,12 +1461,16 @@ FUNCTIONS = {
                 },
                 "scheduled_at": {
                     "type": "string",
-                    "description": "Updated execution time in ISO 8601 format (e.g., '2026-09-12T18:00:00+03:00')."
+                    "description": "Execution timestamp in ISO format WITHOUT timezone offset (e.g., '2026-09-12T17:00:00'). Use exact local wall-clock time."
                 },
                 "status": {
                     "type": "string",
                     "enum": ["pending", "running", "completed", "expired", "cancelled"],
                     "description": "Updated task status."
+                },
+                "cron_expression": {
+                    "type": "string",
+                    "description": "Cron expression for recurring tasks (e.g., '0 2 * * *' for daily at 02:00). CRITICAL: Write hours and minutes in exact LOCAL time. DO NOT convert hours to UTC. Pass null for one-time tasks."
                 }
                 #,
                 # "is_ack_received": {

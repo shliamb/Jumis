@@ -3,6 +3,7 @@ import asyncio
 import json
 import os
 import datetime
+from zoneinfo import ZoneInfo
 from uuid import UUID
 from decimal import Decimal
 from aiogram import types
@@ -10,8 +11,7 @@ from typing import Any, Dict, List
 from aiogram.types import FSInputFile
 from logs.set_logger import set_logger
 logger = set_logger(name="backup_json")
-from config import PATH_JSON
-from config import ADMIN_ID
+from config import PATH_JSON, TIME_ZONE, ADMIN_ID
 
 
 
@@ -51,7 +51,8 @@ class JsonBackup():
     def _json_serializer(obj: Any) -> Any:
         """Сериализатор: из типов Python/БД в валидный JSON-формат."""
         if isinstance(obj, datetime.datetime):
-            return obj.isoformat()
+            return obj.replace(tzinfo=None).isoformat()
+            # return obj.isoformat()
         if isinstance(obj, datetime.date):
             return obj.isoformat()
         if isinstance(obj, UUID):
@@ -76,8 +77,9 @@ class JsonBackup():
                 key.endswith("_at") or key.endswith("_date") or key.startswith("due_")
             ):
                 try:
-                    # Вызываем fromisoformat у класса datetime.datetime
-                    parsed_rec[key] = datetime.datetime.fromisoformat(val.replace("Z", "+00:00"))
+                    # 1. Парсим ISO-строку в datetime
+                    dt = datetime.datetime.fromisoformat(val)
+                    parsed_rec[key] = dt.replace(tzinfo=None)
                 except ValueError:
                     parsed_rec[key] = val
             else:
@@ -96,9 +98,10 @@ class JsonBackup():
         Если записей больше max_records_per_file, разбивает на автономные чанки-файлы.
         """
         saved_filepaths = []
+        app_tz = ZoneInfo(TIME_ZONE)
         try:
             os.makedirs(self.path_json, exist_ok=True)
-            timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            timestamp = datetime.datetime.now(app_tz).strftime("%Y-%m-%d_%H-%M-%S")
 
             # Разбиваем большой список на чанки
             chunks = [

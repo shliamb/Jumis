@@ -1,9 +1,10 @@
 # jumis/scheduler/scheduler.py
 import asyncio
 from datetime import datetime, timezone, timedelta
+from zoneinfo import ZoneInfo
 from croniter import croniter
 from typing import Any, Dict, Optional
-from config import ADMIN_ID
+from config import ADMIN_ID, TIME_ZONE
 from logs.set_logger import set_logger
 logger = set_logger(name="scheduler")
 
@@ -70,13 +71,10 @@ class SmartScheduler:
                     await self._sleep_or_event(3600.0)
                     continue
 
-                now = datetime.now(timezone.utc)
+                app_tz = ZoneInfo(TIME_ZONE)
+                now = datetime.now(app_tz)
                 scheduled_at = task["scheduled_at"]
-
-                # Приводим время из БД к UTC, если оно пришли без tzinfo
-                if scheduled_at.tzinfo is None:
-                    scheduled_at = scheduled_at.replace(tzinfo=timezone.utc)
-
+                scheduled_at = scheduled_at.replace(tzinfo=None).replace(tzinfo=app_tz)
                 delay = (scheduled_at - now).total_seconds()
 
                 # 3. Если время задачи уже наступило (или просрочено) — исполняем
@@ -118,14 +116,18 @@ class SmartScheduler:
     async def _execute_task(self, task: Dict[str, Any]):
         """Маршрутизация и запуск выполнения задачи."""
         id_task = task["id"]
-        now = datetime.now(timezone.utc)
-        scheduled_at = task["scheduled_at"]
-        if scheduled_at.tzinfo is None:
-            scheduled_at = scheduled_at.replace(tzinfo=timezone.utc)
 
+        # 1. Берём текущее настенное время по TIME_ZONE и срезаем tzinfo
+        app_tz = ZoneInfo(TIME_ZONE)
+        now = datetime.now(app_tz).replace(tzinfo=None)
+
+        # 2. Из базы приходят чистые цифры (на всякий случай срезаем tzinfo)
+        scheduled_at = task["scheduled_at"].replace(tzinfo=None)
+
+        # 3. Разница в секундах между двумя чистыми датами
         delay = (scheduled_at - now).total_seconds()
 
-        # 1. Если задача просрочена больше чем на 1 час (3600 сек) — сразу в 'expired'
+        # Если задача просрочена больше чем на 1 час (3600 сек) — сразу в 'expired'
         if delay < -3600:
             logger.warning(
                 f"[Scheduler] Задача #{id_task} ('{task['title']}') просрочена на {abs(delay)/60:.1f} мин. "
@@ -241,7 +243,8 @@ class SmartScheduler:
                 )
 
                 # 5. Обновляем таску ТОЛЬКО после успешного выполнения воркером
-                now = datetime.now(timezone.utc)
+                app_tz = ZoneInfo(TIME_ZONE)
+                now = datetime.now(app_tz)
 
                 if has_cron:
                     # Повторяющаяся Крон-задача: считаем следующий запуск
@@ -273,6 +276,27 @@ class SmartScheduler:
                 self.notify_new_task()
             finally:
                 self.agent_queue.task_done()
+
+
+
+
+    async def _cron_worker(self):
+        """Воркер для системных скриптов."""
+        while True:
+            task = await self.cron_queue.get()
+            t_id = task.get("id")
+            try:
+                await self.execute_system_cron(task)
+                
+                if not task.get("cron_expression"):
+                    await self.db_tasks.db_update_task({"id": t_id, "status": "completed"})
+            except Exception as e:
+                logger.error(f"[CronWorker] Ошибка выполнения cron-задачи #{t_id}: {e}", exc_info=True)
+                await self.db_tasks.db_update_task({"id": t_id, "status": "failed"})
+            finally:
+                self.cron_queue.task_done()
+
+
 
 
 
@@ -404,22 +428,6 @@ class SmartScheduler:
     #         finally:
     #             self.agent_queue.task_done()
 
-
-    async def _cron_worker(self):
-        """Воркер для системных скриптов."""
-        while True:
-            task = await self.cron_queue.get()
-            t_id = task.get("id")
-            try:
-                await self.execute_system_cron(task)
-                
-                if not task.get("cron_expression"):
-                    await self.db_tasks.db_update_task({"id": t_id, "status": "completed"})
-            except Exception as e:
-                logger.error(f"[CronWorker] Ошибка выполнения cron-задачи #{t_id}: {e}", exc_info=True)
-                await self.db_tasks.db_update_task({"id": t_id, "status": "failed"})
-            finally:
-                self.cron_queue.task_done()
 
 
 
