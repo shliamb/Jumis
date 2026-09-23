@@ -189,6 +189,7 @@ async def main_bot() -> None:
     dp["jumis_agent"] = jumis_agent
 
     llm.set_jumis_agent(jumis_agent)
+    await llm.refresh_llm_models()
     scheduler.set_agent(jumis_agent)
     scheduler.set_bot(dp.bot)
 
@@ -252,6 +253,9 @@ async def main_bot() -> None:
 
         # 3. Закрываем пул подключений к PostgreSQL (asyncpg)
         await db.close()
+
+        # 4. Останавливаем планировщик тасок
+        await scheduler.stop()
 
         print("Все соединения закрыты. Завершение работы выполнено успешно.")
 

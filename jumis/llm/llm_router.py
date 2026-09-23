@@ -14,7 +14,7 @@ from llm.agents import AGENTS
 from llm.functions import FUNCTIONS
 from config import HISTORY_LIMIT
 from llm.token_usege import DBTokenLogger
-from config import LLM_TIMEOUT, DEFAULT_FALLBACK_MODEL
+from config import LLM_TIMEOUT, DEFAULT_FALLBACK_MODEL, ADMIN_ID
 
 from logs.set_logger import set_logger
 
@@ -71,8 +71,8 @@ class LLMWorker:
         self.available_models: list[str] = []
         self.model_prices: dict[str, dict] = {}
         self.model_default = DEFAULT_FALLBACK_MODEL
-        # self.model_cheap = 
-        # self.model_smart = 
+        self.model_cheap = None
+        self.model_smart = None
 
         # Инициализируем данные при старте
         self.refresh_catalog()
@@ -97,6 +97,8 @@ class LLMWorker:
         self.mytelethon = mytelethon
         self.queue_new_mess = queue_new_mess
 
+        self.admin_id = ADMIN_ID
+
 
     def _get_active_providers(self) -> set[str]:
         """Определяет активные провайдеры по наличию API-ключей в .env"""
@@ -115,7 +117,6 @@ class LLMWorker:
         missing = [key for key in required_keys if not os.getenv(key)]
         if missing:
             print(f"⚠️ [LLMWorker Warning] Следующие ключи не найдены в .env.llm: {', '.join(missing)}")
-
 
 
     def _get_active_providers(self) -> set[str]:
@@ -181,13 +182,45 @@ class LLMWorker:
         self.available_models = sorted(list(clean_models))
         self.model_prices = prices
 
+
     def get_model_cost_info(self, model_name: str) -> dict:
-        """Утилита для быстрого получения цены конкретной модели"""
+        """Получение цены конкретной модели"""
         return self.model_prices.get(model_name, {
             "input_cost_per_token": 0.0,
             "output_cost_per_token": 0.0,
             "provider": "unknown"
         })
+
+
+    async def refresh_llm_models(self) -> bool:
+        """Достает из профиля админа выбранные модели и обновляет их в воркере."""
+        if not self.db_users:
+            logger.error("DB Users service is not initialized in LLMWorker.")
+            return False
+
+        admin_data = await self.db_users.search_users(tg_id=self.admin_id)
+
+        # Если поиск возвращает список результатов — берем первого
+        if isinstance(admin_data, list):
+            admin_data = admin_data[0] if admin_data else None
+
+        if not admin_data:
+            logger.warning(f"Admin profile (tg_id={self.admin_id}) not found in DB. Fallback to default.")
+            self.model_default = DEFAULT_FALLBACK_MODEL
+            return False
+
+        # Извлекаем модели с фоллбэками
+        self.model_default = admin_data.get("model_default") or DEFAULT_FALLBACK_MODEL
+        self.model_cheap = admin_data.get("model_cheap")
+        self.model_smart = admin_data.get("model_smart")
+
+        logger.info(
+            f"LLM models refreshed from DB for admin {self.admin_id}: "
+            f"default='{self.model_default}', cheap='{self.model_cheap}', smart='{self.model_smart}'"
+        )
+        return True
+
+
 
 
 

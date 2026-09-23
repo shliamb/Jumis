@@ -10,8 +10,9 @@ from aiogram import types
 from typing import Any, Dict, List
 from aiogram.types import FSInputFile
 from logs.set_logger import set_logger
+from utils.common import get_date_str
 logger = set_logger(name="backup_json")
-from config import PATH_JSON, TIME_ZONE, ADMIN_ID
+from config import PATH_JSON, ADMIN_ID
 
 
 
@@ -98,10 +99,9 @@ class JsonBackup():
         Если записей больше max_records_per_file, разбивает на автономные чанки-файлы.
         """
         saved_filepaths = []
-        app_tz = ZoneInfo(TIME_ZONE)
         try:
             os.makedirs(self.path_json, exist_ok=True)
-            timestamp = datetime.datetime.now(app_tz).strftime("%Y-%m-%d_%H-%M-%S")
+            timestamp = get_date_str()
 
             # Разбиваем большой список на чанки
             chunks = [

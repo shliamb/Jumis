@@ -1,5 +1,43 @@
 #! master/utils/common.py
 import re
+from datetime import datetime, timezone, timedelta
+from zoneinfo import ZoneInfo
+# from croniter import croniter
+from typing import Any, Dict, Optional
+from config import TIME_ZONE
+
+
+
+
+
+def get_now_datetime() -> datetime:
+    """Возвращает текущее время строго в часовом поясе приложения."""
+    return datetime.now(ZoneInfo(TIME_ZONE)).replace(tzinfo=None)
+
+def get_date_str() -> str:
+    """Получение текущей даты и времени по настенным часам из TIME_ZONE."""
+    return get_now_datetime().strftime("%Y-%m-%d %H:%M:%S")
+
+def to_cleen(dt: datetime) -> datetime:
+    """Очищает дополнительно datetime от timezone"""
+    return dt.replace(tzinfo=None)
+
+def to_app_tz_naive(dt: datetime) -> datetime:
+    """Переводит datetime в нужный часовой пояс и очищает от tzinfo."""
+    return dt.astimezone(ZoneInfo(TIME_ZONE)).replace(tzinfo=None)
+
+def get_date_datetime(dt: str) -> datetime:
+    """Переводит str в datetime и очищает от tzinfo."""
+    return datetime.fromisoformat(dt).replace(tzinfo=None)
+
+
+
+
+
+
+
+
+
 
 def extract_id_from_message(text: str):
     """ Извлечение bot id из формата: 
@@ -71,3 +109,36 @@ def sanitize_human_text(text: str) -> str:
     text = re.sub(r'\n{3,}', '\n\n', text)
 
     return text.strip()
+
+
+
+def split_html_text(text: str, max_length: int = 4000) -> list[str]:
+    """
+    Разбивает длинный HTML-текст на куски не более max_length символов,
+    не разрывая закрывающие и открывающие HTML-теги.
+    """
+    if len(text) <= max_length:
+        return [text]
+
+    chunks = []
+    while text:
+        if len(text) <= max_length:
+            chunks.append(text)
+            break
+
+        # Ищем безопасное место для разреза (перенос строки или пробел)
+        split_at = text.rfind('\n', 0, max_length)
+        if split_at == -1 or split_at < max_length // 2:
+            split_at = text.rfind(' ', 0, max_length)
+
+        if split_at == -1:
+            split_at = max_length
+
+        chunk = text[:split_at]
+        text = text[split_at:].lstrip('\n')
+
+        chunks.append(chunk)
+
+    return chunks
+
+

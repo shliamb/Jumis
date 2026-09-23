@@ -33,8 +33,7 @@ LOG_TO_FILE = False
 HOST = "127.0.0.1" if DOCKER else  "localhost" # app_postgres localhost
 PORT = 5432 if DOCKER else 15433  # В докере стучимся на внешний порт, локально — на стандартный
 MAX_SIZE_DOC = 2 # 2 мегабайт
-# TIME_ZONE = 'Europe/Moscow' # +03:00
-TIME_ZONE = "UTC"  # или "Etc/UTC" +00:00
+TIME_ZONE = 'Europe/Moscow' # +03:00
 ERR_PROXY_LIMIT = 3
 
 

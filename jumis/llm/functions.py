@@ -2,10 +2,10 @@
 import asyncio
 from typing import Any, Dict, List, Optional
 from vector import embedder
-from utils.common import sanitize_human_text
-from datetime import datetime
-from zoneinfo import ZoneInfo
-from config import ADMIN_ID, TIME_ZONE
+from utils.common import sanitize_human_text, get_now_datetime, get_date_str, to_cleen, get_date_datetime
+from datetime import datetime, timezone, timedelta
+from croniter import croniter
+from config import ADMIN_ID
 from logs.set_logger import set_logger
 logger = set_logger(name="llmfunc")
 import json
@@ -18,15 +18,8 @@ import json
 background_tasks = set()
 
 
-########## DATE ###############
-
-async def get_date() -> str:
-    """Получение текущей даты и времени по настенным часам из TIME_ZONE."""
-    app_tz = ZoneInfo(TIME_ZONE)
-    return datetime.now(app_tz).strftime("%Y-%m-%d %H:%M:%S")
 
 ###### MEMORIES ##########
-
 
 
 async def add_category_facts(name: str, description: str = "", db_memory=None) -> str:
@@ -758,27 +751,13 @@ async def send_mess_peer(peer_id: int, text_mess: str, mytelethon, queue_new_mes
             return f"Error sending message to {peer_id}: {answer}"
 
         # 2. Успешно отправлено — извлекаем tg_msg_id и дату
-        app_tz = ZoneInfo(TIME_ZONE)
 
         if isinstance(answer, int):
-            tg_msg_id = answer
-            created_at = datetime.now(app_tz).replace(tzinfo=None)
+            tg_msg_id, created_at = answer, get_now_datetime()
         else:
             tg_msg_id = getattr(answer, "id", None)
             raw_date = getattr(answer, "date", None)
-            
-            # Проверяем, что raw_date — это реально дата, а не число или None
-            if isinstance(raw_date, datetime):
-                if raw_date.tzinfo is not None:
-                    # Переводим из UTC в Москву и сдираем плашку тайм-зоны
-                    created_at = raw_date.astimezone(app_tz).replace(tzinfo=None)
-                else:
-                    # Если дата уже без тайм-зоны, оставляем как есть
-                    created_at = raw_date
-            else:
-                # Если там был None или число — берем текущие московские цифры
-                created_at = datetime.now(app_tz).replace(tzinfo=None)
-
+            created_at = to_cleen(raw_date) if isinstance(raw_date, datetime) else get_now_datetime()
 
         # 3. Формируем таск для воркера/JumisAgent
         task_payload = {
@@ -834,18 +813,8 @@ async def get_pending_queue(jumis_agent=None) -> str:
 ##### TASKS #######
 
 async def add_task(scheduler, db_tasks, **kwargs) -> str:
-    """
-    Creates a new scheduled task in the database, notifies the scheduler, 
-    and returns a structured status report for Agent context.
+    """Создает и регистрирует новую задачу (разовую или Cron)."""
 
-    Args:
-        scheduler: Instance of SmartScheduler to trigger instant timer recalculation.
-        db_tasks: Database handler instance for scheduled tasks.
-        **kwargs: Task parameters (title, agent_instruction, scheduled_at, task_type, etc.).
-
-    Returns:
-        str: Formatted string header and status message with task details.
-    """
     header = "=== Task Creation Status ==="
 
     if not scheduler:
@@ -856,47 +825,81 @@ async def add_task(scheduler, db_tasks, **kwargs) -> str:
         logger.error("[add_task] Database handler (db_tasks) is missing or None.")
         return f"{header}\n[CRITICAL ERROR] Database connection is unavailable."
 
-    # Filter out None values
+    # Отфильтровываем None значения
     task_data = {key: val for key, val in kwargs.items() if val is not None}
 
-    # Validate mandatory parameters
-    if not task_data.get("title") or not task_data.get("agent_instruction") or not task_data.get("scheduled_at"):
-        logger.warning(f"[add_task] Missing mandatory fields in payload: {task_data}")
+    title = task_data.get("title")
+    agent_instruction = task_data.get("agent_instruction")
+    scheduled_at_raw = task_data.get("scheduled_at")
+    cron_expression = task_data.get("cron_expression")
+
+    # По умолчанию тип 'reminder', если ничего не передали
+    task_type = task_data.get("task_type", "reminder")
+    task_data["task_type"] = task_type
+
+    # Валидация обязательных полей
+    if not title or not agent_instruction:
+        logger.warning(f"[add_task] Missing mandatory fields: {task_data}")
         return (
             f"{header}\n"
             f"[INVALID PARAMETERS] Task creation failed. Mandatory parameters missing: "
-            f"'title', 'agent_instruction', and 'scheduled_at' are required."
+            f"'title' and 'agent_instruction' are required."
+        )
+    
+    now = get_now_datetime()
+
+    # 1. Приведение scheduled_at к чистой настенной дате (Naive datetime)
+    parsed_scheduled_at = None
+    if scheduled_at_raw:
+        if isinstance(scheduled_at_raw, str):
+            try:
+                # Очищаем от tzinfo, чтобы не было конфликтов с настенным временем
+                parsed_scheduled_at = get_date_datetime(scheduled_at_raw)
+            except ValueError as e:
+                logger.error(f"[add_task] Ошибка формата даты: {e}")
+                return f"{header}\n[INVALID PARAMETERS] Неверный формат даты ISO: {scheduled_at_raw}"
+        elif isinstance(scheduled_at_raw, datetime):
+            parsed_scheduled_at = to_cleen(scheduled_at_raw)
+
+    # 2. Валидация и расчет времени для ВСЕХ CRON задач (любого task_type)
+    if cron_expression:
+        if not croniter.is_valid(cron_expression):
+            logger.error(f"[add_task] Невалидное Cron-выражение: {cron_expression}")
+            return f"{header}\n[INVALID PARAMETERS] Ошибка: Невалидное Cron-выражение '{cron_expression}'."
+
+        # Если дата не передана или переданный scheduled_at уже в прошлом — считаем следующий запуск
+        if not parsed_scheduled_at or parsed_scheduled_at <= now:
+            parsed_scheduled_at = croniter(cron_expression, now).get_next(datetime)
+            logger.info(f"[add_task] Авто-расчет первого запуска Cron-задачи: {parsed_scheduled_at}")
+
+    # Для разовых задач дата обязательна
+    elif not parsed_scheduled_at:
+        return (
+            f"{header}\n"
+            f"[INVALID PARAMETERS] For one-time tasks, 'scheduled_at' is required."
         )
 
-    # Приводим scheduled_at к datetime объекту
-    if "scheduled_at" in task_data and isinstance(task_data["scheduled_at"], str):
-        try:
-            task_data["scheduled_at"] = datetime.fromisoformat(task_data["scheduled_at"])
-        except ValueError as e:
-            logger.error(f"[add_task] Ошибка формата даты: {e}")
-            return f"{header}\n[INVALID PARAMETERS] Неверный формат даты ISO: {task_data['scheduled_at']}"
+    task_data["scheduled_at"] = parsed_scheduled_at
 
     try:
         task_id = await db_tasks.db_add_task(task_data)
 
         if task_id:
-            # Instantly wake up the scheduler loop to recalculate sleep timer
+            # Будим поток планировщика для мгновенного перерасчета времени сна
             scheduler.notify_new_task()
 
-            title = task_data.get("title", "Untitled")
-            scheduled_at = task_data.get("scheduled_at", "N/A")
-            task_type = task_data.get("task_type", "reminder")
-            cron_expression = task_data.get("cron_expression", "N/A")
-
-            logger.info(f"[add_task] Task #{task_id} ('{title}') successfully created and scheduled for {scheduled_at}.")
+            logger.info(
+                f"[add_task] Task #{task_id} ('{title}') [{task_type}] "
+                f"successfully created for {parsed_scheduled_at} (cron: {cron_expression or 'N/A'})."
+            )
             return (
                 f"{header}\n"
-                f"[SUCCESS] Task #{task_id} successfully created and added to queue!\n"
+                f"[SUCCESS] Task #{task_id} successfully created and queued!\n"
                 f"• Task ID: {task_id}\n"
                 f"• Type: {task_type}\n"
                 f"• Title: {title}\n"
-                f"• Scheduled Time: {scheduled_at}"
-                f"• Cron_expression: {cron_expression}"
+                f"• Scheduled Time: {parsed_scheduled_at.strftime('%Y-%m-%d %H:%M:%S')}\n"
+                f"• Cron Expression: {cron_expression or 'N/A'}"
             )
 
         logger.error(f"[add_task] DB returned no task ID for payload: {task_data}")
@@ -907,19 +910,9 @@ async def add_task(scheduler, db_tasks, **kwargs) -> str:
         return f"{header}\n[EXCEPTION] Failed to create task due to an internal error: {e}"
 
 
+
 async def update_task(scheduler, db_tasks, **kwargs) -> str:
-    """
-    Updates an existing scheduled task in the database, notifies the scheduler,
-    and returns a structured status report for Agent context.
-
-    Args:
-        scheduler: Instance of SmartScheduler to trigger instant timer recalculation.
-        db_tasks: Database handler instance for scheduled tasks.
-        **kwargs: Task parameters to update (must include 'id').
-
-    Returns:
-        str: Formatted string header and status message with updated details.
-    """
+    """Обновляет параметры существующей задачи."""
     header = "=== Task Update Status ==="
 
     if not scheduler:
@@ -930,7 +923,7 @@ async def update_task(scheduler, db_tasks, **kwargs) -> str:
         logger.error("[update_task] Database handler (db_tasks) is missing or None.")
         return f"{header}\n[CRITICAL ERROR] Database connection is unavailable."
 
-    # Filter out None values
+    # Отфильтровываем None значения
     task_data = {key: val for key, val in kwargs.items() if val is not None}
 
     task_id = task_data.get("id")
@@ -942,24 +935,38 @@ async def update_task(scheduler, db_tasks, **kwargs) -> str:
         logger.warning(f"[update_task] No fields to update provided for task #{task_id}.")
         return f"{header}\n[NO CHANGES] No valid update parameters provided for task #{task_id}."
 
-    # Приводим scheduled_at к datetime объекту
-    if "scheduled_at" in task_data and isinstance(task_data["scheduled_at"], str):
-        try:
-            task_data["scheduled_at"] = datetime.fromisoformat(task_data["scheduled_at"])
-        except ValueError as e:
-            logger.error(f"[add_task] Ошибка формата даты: {e}")
-            return f"{header}\n[INVALID PARAMETERS] Неверный формат даты ISO: {task_data['scheduled_at']}"
+    # 1. Приведение scheduled_at к настенному datetime
+    if "scheduled_at" in task_data:
+        raw_scheduled = task_data["scheduled_at"]
+        if isinstance(raw_scheduled, str):
+            try:
+                task_data["scheduled_at"] = get_date_datetime(raw_scheduled)
+            except ValueError as e:
+                logger.error(f"[update_task] Ошибка формата даты: {e}")
+                return f"{header}\n[INVALID PARAMETERS] Неверный формат даты ISO: {raw_scheduled}"
+        elif isinstance(raw_scheduled, datetime):
+            task_data["scheduled_at"] = raw_scheduled.replace(tzinfo=None)
+
+    # 2. Если меняется cron_expression, пересчитываем ближайший запуск (если scheduled_at не передали вручную)
+    cron_expr = task_data.get("cron_expression")
+    if cron_expr:
+        if not croniter.is_valid(cron_expr):
+            logger.error(f"[update_task] Невалидное Cron-выражение: {cron_expr}")
+            return f"{header}\n[INVALID PARAMETERS] Ошибка: Невалидное Cron-выражение '{cron_expr}'."
+        
+        if "scheduled_at" not in task_data:
+            now = get_now_datetime()
+            task_data["scheduled_at"] = croniter(cron_expr, now).get_next(datetime)
 
     try:
         success = await db_tasks.db_update_task(task_data)
 
         if success:
-            # Instantly wake up the scheduler loop to recalculate sleep timer
+            # Будим поток планировщика для мгновенного перерасчета времени сна
             scheduler.notify_new_task()
 
             logger.info(f"[update_task] Task #{task_id} updated successfully.")
             
-            # Format list of updated fields for clarity
             updated_fields = ", ".join([k for k in task_data.keys() if k != "id"])
             return (
                 f"{header}\n"
@@ -974,6 +981,7 @@ async def update_task(scheduler, db_tasks, **kwargs) -> str:
     except Exception as e:
         logger.error(f"[update_task] Unexpected error while updating task #{task_id}: {e}", exc_info=True)
         return f"{header}\n[EXCEPTION] Failed to update task #{task_id} due to an internal error: {e}"
+
 
 
 async def search_tasks(db_tasks, id: int = None, status: str = None, limit: int = 20) -> str:
@@ -1073,7 +1081,7 @@ FUNCTIONS = {
 
     "get_date": {
         "description": "Returns the current system date and time. Provides precise temporal context for relative date calculations, scheduling, and time-sensitive queries.",
-        "function": get_date,
+        "function": get_date_str,
         "schema": {
             "type": "object",
             "properties": {},

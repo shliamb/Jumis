@@ -7,8 +7,8 @@ from aiogram.filters import CommandStart
 from aiogram import Router, types, F
 from datetime import datetime
 from zoneinfo import ZoneInfo
-from config import TIME_ZONE
 from handlers.common import rights_verification
+from utils.common import get_now_datetime
 
 # from aiogram.types import Message
 # from aiogram.fsm.context import FSMContext
@@ -75,8 +75,7 @@ async def start_router(message: types.Message, db_users):
         return
 
     # 4. Формирование данных и запись нового пользователя
-    app_tz = ZoneInfo(TIME_ZONE)
-    now = datetime.now(app_tz)
+    now = get_now_datetime()
     new_user_data = {
         "tg_id": user_id,
         "full_name": full_name,
@@ -103,46 +102,6 @@ async def start_router(message: types.Message, db_users):
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-# #### Push /start ####
-# @router.message(CommandStart())
-# async def start_router(message: types.Message): #, state: FSMContext):
-#     """ Push Start """
-#     await typing(message)
-#     lang = message.from_user.language_code
-#     user_id = message.from_user.id
-#     full_name = 
-
-#     if not await rights_verification(user_id, lang, message): return
-
-#     if message.from_user.is_bot:
-#         await message.answer("🚔 Sorry, the bot only works with humans.")
-#         return
-
-#     if await get_user_by_tg(user_id):
-#         if lang == "ru": await message.answer("Вы уже были зарегистрированы в системе ранее.")
-#         else: await message.answer("You have already been registered in the system before.")
-#         return
-
-#     new_user_data = {'tg_id': user_id, 'lang_code': lang, 'is_admin': True, 'created_at': datetime.now()}
-#     if await add_user(new_user_data):
-#         if lang == "ru": await message.answer("Вы успешно зарегались")
-#         else: await message.answer("...")
-#         return
-#     else:
-#         if lang == "ru": await message.answer("Что то пошло не так при регистрации, извините..")
-#         else: await message.answer(" сомсинг вронг, сори бля")
-#         return
 
 
 

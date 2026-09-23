@@ -1,6 +1,7 @@
 #! master/handler/admin.py
 import os
 import sys
+import json
 import asyncio
 from handlers.common import typing
 from logs.set_logger import set_logger
@@ -9,6 +10,7 @@ from aiogram import Router, types, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
+from aiogram.exceptions import TelegramRetryAfter, TelegramAPIError, TelegramBadRequest, ClientDecodeError
 # from aiogram.types import ReplyKeyboardRemove
 from config import DOWNLOAD, ADMIN_ID, PATH_LOGS, DOCKER
 from database.create_tables import create_tables_in_db
@@ -136,9 +138,7 @@ async def reset_system(message: types.Message, bot):
     await typing(message)
     lang = message.from_user.language_code
     user_id = message.from_user.id
-    
-    if not await rights_verification(user_id, lang, message):
-        return
+    if not await rights_verification(user_id, lang, message): return
 
     text = "🔄 *Перезапускаю систему...*" if lang == "ru" else "🔄 *Restarting system...*"
     await message.answer(text, parse_mode="Markdown")
@@ -154,9 +154,7 @@ async def update_litellm(message: types.Message):
     await typing(message)
     lang = message.from_user.language_code
     user_id = message.from_user.id
-    
-    if not await rights_verification(user_id, lang, message):
-        return
+    if not await rights_verification(user_id, lang, message): return
 
     start_text = "⏳ *Обновляю LiteLLM и ML-стек через uv...*" if lang == "ru" else "⏳ *Updating LiteLLM & ML stack via uv...*"
     status_msg = await message.answer(start_text, parse_mode="Markdown")
@@ -217,11 +215,212 @@ async def update_litellm(message: types.Message):
 
 
 
+####### MODELS ########
+
+def format_models_to_html(models_data: dict | list | str) -> str:
+    """
+    Форматирует структуру моделей в красивый HTML-список.
+    Каждое название модели оборачивается в <code>...</code>,
+    что позволяет скопировать её в буфер обмена в один клик/тап в Telegram.
+    """
+    if isinstance(models_data, dict):
+        lines = []
+        for provider, models in models_data.items():
+            lines.append(f"<b>{provider}:</b>")
+            if isinstance(models, list):
+                for model in models:
+                    lines.append(f"• <code>{model}</code>")
+            else:
+                lines.append(f"• <code>{models}</code>")
+            lines.append("")  # Пустая строка для визуального разделения провайдеров
+        return "\n".join(lines).strip()
+
+    elif isinstance(models_data, list):
+        return "\n".join([f"• <code>{model}</code>" for model in models_data])
+
+    # Если пришла просто строка или другой тип
+    return f"<code>{models_data}</code>"
+
+
+def split_by_lines(text: str, max_length: int = 3800) -> list[str]:
+    """
+    Безопасно разбивает готовый HTML-текст по строкам (по \n).
+    Так как каждая модель занимает ровно одну строку (`• <code>model</code>`),
+    разрез по строкам ГАРАНТИРУЕТ, что ни один HTML-тег не будет разорван пополам.
+    """
+    if len(text) <= max_length:
+        return [text]
+
+    chunks = []
+    current_chunk = []
+    current_length = 0
+
+    for line in text.split("\n"):
+        # +1 учитывает символ переноса строки \n
+        if current_length + len(line) + 1 > max_length:
+            chunks.append("\n".join(current_chunk))
+            current_chunk = [line]
+            current_length = len(line)
+        else:
+            current_chunk.append(line)
+            current_length += len(line) + 1
+
+    if current_chunk:
+        chunks.append("\n".join(current_chunk))
+
+    return chunks
+
+
+# GET MODELS
+@router.message(Command("getMod"))
+async def get_models_llm(message: types.Message, llm):
+    """Возвращает список доступных моделей LLM с кликабельным копированием."""
+    await typing(message)
+    lang = message.from_user.language_code
+    user_id = message.from_user.id
+    if not await rights_verification(user_id, lang, message): return
+
+    # 1. Заголовок
+    header = (
+        "<b>Доступные модели LLM:</b>\n\n"
+        if lang == "ru"
+        else "<b>Available LLM models:</b>\n\n"
+    )
+
+    # 2. Преобразуем данные моделей в удобный список с <code> model </code>
+    formatted_models = format_models_to_html(llm.available_models)
+    full_text = header + formatted_models
+
+    # 3. Нарезаем текст на куски, если моделей слишком много (лимит ~3800 символов)
+    chunks = split_by_lines(full_text, max_length=3800)
+
+    # 4. Последовательно отправляем сообщения
+    try:
+        for chunk in chunks:
+            if chunk.strip():
+                await message.answer(chunk, parse_mode="HTML")
+    except TelegramBadRequest as e:
+        logger.error(f"Ошибка при отправке списка моделей в Telegram: {e}")
+        await message.answer(
+            "⚠️ Ошибка при формировании списка моделей."
+            if lang == "ru"
+            else "⚠️ Error displaying models list."
+        )
 
 
 
+# FSM STATES
+class SetModelStates(StatesGroup):
+    waiting_for_model = State()
 
 
+# HELPER FUNCTIONS
+def _extract_flat_models_list(available_models: dict | list) -> list[str]:
+    """Извлекает плоский список всех моделей, независимо от структуры (dict или list)."""
+    if isinstance(available_models, dict):
+        flat_list = []
+        for models in available_models.values():
+            if isinstance(models, list):
+                flat_list.extend(models)
+            elif isinstance(models, str):
+                flat_list.append(models)
+        return flat_list
+    elif isinstance(available_models, list):
+        return available_models
+    return [str(available_models)]
+
+
+# START SET MODEL COMMAND
+@router.message(Command("setMod"))
+async def set_llm_model(message: types.Message, state: FSMContext):
+    """Инициализация смены модели по умолчанию."""
+    await typing(message)
+    
+    user_id = message.from_user.id
+    lang = message.from_user.language_code
+
+    if not await rights_verification(user_id, lang, message):
+        return
+
+    await state.set_state(SetModelStates.waiting_for_model)
+    
+    prompt = (
+        "✏️ <b>Введите название LLM модели:</b>\n\n"
+        "<i>Для отмены отправьте «отмена» или «cancel».</i>"
+        if lang == "ru"
+        else "✏️ <b>Enter the LLM model name:</b>\n\n"
+        "<i>To cancel, type 'cancel'.</i>"
+    )
+    await message.answer(prompt, parse_mode="HTML")
+
+
+# WRITE TO DB (FSM HANDLER)
+@router.message(SetModelStates.waiting_for_model)
+async def write_name_llm_to_db(
+    message: types.Message, 
+    state: FSMContext, 
+    llm, 
+    db_users
+):
+    """Валидация и запись выбранной модели в БД."""
+    lang = message.from_user.language_code
+    user_id = message.from_user.id
+    raw_input = message.text.strip() if message.text else ""
+
+    # 1. Проверка на пустой ввод
+    if not raw_input:
+        msg = "⚠️ Пожалуйста, введите текстовое название модели." if lang == "ru" else "⚠️ Please enter a valid model name."
+        await message.answer(msg)
+        return
+
+    # 2. Обработка отмены
+    if raw_input.lower() in ["cancel", "cansel", "отмена", "отменить"]:
+        await state.clear()
+        logger.info(f"User {user_id} cancelled model selection.")
+        msg = "🚫 Ввод модели отменён." if lang == "ru" else "🚫 Model selection cancelled."
+        await message.answer(msg)
+        return
+
+    # 3. Достаём полный список моделей и ищем совпадение (без учёта регистра)
+    all_models = _extract_flat_models_list(llm.available_models)
+    matched_model = next((m for m in all_models if m.lower() == raw_input.lower()), None)
+
+    if not matched_model:
+        logger.warning(f"User {user_id} entered invalid model: {raw_input}")
+        msg = (
+            f"❌ Модель <code>{raw_input}</code> не найдена в списке доступных.\n\n"
+            f"Попробуйте ещё раз или введите «отмена»."
+            if lang == "ru"
+            else f"❌ Model <code>{raw_input}</code> is not in the available models list.\n\n"
+            f"Please try again or send 'cancel'."
+        )
+        await message.answer(msg, parse_mode="HTML")
+        return
+
+    # 4. Обновление пользователя в БД
+    update_data = {"tg_id": user_id, "model_default": matched_model}
+    
+    if not await db_users.db_update_user(update_data):
+        logger.error(f"Failed to update default model for user {user_id} in DB.")
+        msg = "⚠️ Ошибка при сохранении в базу данных." if lang == "ru" else "⚠️ Error saving model to database."
+        await message.answer(msg)
+        return
+
+    # 5. Обновляем кеш/модели в LLM сервисе
+    if hasattr(llm, "refresh_llm_models"):
+        await llm.refresh_llm_models()
+
+    # 6. Успешный финал
+    logger.info(f"User {user_id} updated default model to: {matched_model}")
+    success_msg = (
+        f"✅ Модель по умолчанию успешно изменена на <code>{matched_model}</code>"
+        if lang == "ru"
+        else f"✅ Default model successfully updated to <code>{matched_model}</code>"
+    )
+    await message.answer(success_msg, parse_mode="HTML")
+    
+    # Сбрасываем состояние FSM
+    await state.clear()
 
 
 
@@ -303,7 +502,6 @@ async def download_json(message: types.Message, json_back):
 
 
 
-
 # RESTORE TABLE IN JSON FILE
 
 class RestoreState(StatesGroup):
@@ -327,55 +525,79 @@ async def answer_bot(message: types.Message, lang: str, name_action: str):
 # 01. Категории пользователей
 @router.message(Command("up_users_cat"))
 async def cmd_up_users_cat(message: types.Message, state: FSMContext):
+    await typing(message)
+    lang = message.from_user.language_code
+    user_id = message.from_user.id
+    if not await rights_verification(user_id, lang, message): return
     name_action = "01_user_categories"
     await state.update_data(name_action=name_action)
     await state.set_state(RestoreState.waiting_file)
-    await answer_bot(message, message.from_user.language_code, name_action)
+    await answer_bot(message, lang, name_action)
 
 
 # 02. Категории фактов (памяти)
 @router.message(Command("up_facts_cat"))
 async def cmd_up_facts_cat(message: types.Message, state: FSMContext):
+    await typing(message)
+    lang = message.from_user.language_code
+    user_id = message.from_user.id
+    if not await rights_verification(user_id, lang, message): return
     name_action = "02_facts_categories"
     await state.update_data(name_action=name_action)
     await state.set_state(RestoreState.waiting_file)
-    await answer_bot(message, message.from_user.language_code, name_action)
+    await answer_bot(message, lang, name_action)
 
 
 # 03. Пользователи
 @router.message(Command("up_users"))
 async def cmd_up_users(message: types.Message, state: FSMContext):
+    await typing(message)
+    lang = message.from_user.language_code
+    user_id = message.from_user.id
+    if not await rights_verification(user_id, lang, message): return
     name_action = "03_users"
     await state.update_data(name_action=name_action)
     await state.set_state(RestoreState.waiting_file)
-    await answer_bot(message, message.from_user.language_code, name_action)
+    await answer_bot(message, lang, name_action)
 
 
 # 04. Факты (память)
 @router.message(Command("up_facts"))
 async def cmd_up_facts(message: types.Message, state: FSMContext):
+    await typing(message)
+    lang = message.from_user.language_code
+    user_id = message.from_user.id
+    if not await rights_verification(user_id, lang, message): return
     name_action = "04_facts"
     await state.update_data(name_action=name_action)
     await state.set_state(RestoreState.waiting_file)
-    await answer_bot(message, message.from_user.language_code, name_action)
+    await answer_bot(message, lang, name_action)
 
 
 # 05. Сообщения (история переписки)
 @router.message(Command("up_messages"))
 async def cmd_up_messages(message: types.Message, state: FSMContext):
+    await typing(message)
+    lang = message.from_user.language_code
+    user_id = message.from_user.id
+    if not await rights_verification(user_id, lang, message): return
     name_action = "05_messages"
     await state.update_data(name_action=name_action)
     await state.set_state(RestoreState.waiting_file)
-    await answer_bot(message, message.from_user.language_code, name_action)
+    await answer_bot(message, lang, name_action)
 
 
 # 06. Задачи
 @router.message(Command("up_tasks"))
 async def cmd_up_tasks(message: types.Message, state: FSMContext):
+    await typing(message)
+    lang = message.from_user.language_code
+    user_id = message.from_user.id
+    if not await rights_verification(user_id, lang, message): return
     name_action = "06_tasks"
     await state.update_data(name_action=name_action)
     await state.set_state(RestoreState.waiting_file)
-    await answer_bot(message, message.from_user.language_code, name_action)
+    await answer_bot(message, lang, name_action)
 
 
 # Отказ
