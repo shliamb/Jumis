@@ -390,6 +390,7 @@ async def update_user(
     tg_id: int | None = None,
     target_username: str | None = None,
     db_users=None,
+    llm=None,
     **kwargs
 ) -> str:
     """Обновление профиля пользователя по одному из идентификаторов."""
@@ -461,7 +462,18 @@ async def update_user(
         logger.error("Failed to update user %s", target_label)
         return f"Error: User '{target_label}' not found or database update failed."
 
-    # 6. Подтверждение для LLM (скрываем внутреннее векторное поле из ответа)
+    # 6. Если обновились модели у пользователя, обновляем в классе LLM
+    model_keys = {"model_default", "model_cheap", "model_smart"}
+    if any(k in update_fields for k in model_keys):
+        if llm:
+            if await llm.refresh_llm_models():
+                logger.info(f"[update_user] LLM models cache refreshed after updating {target_label}.")
+            else:
+                logger.error(f"[update_user] Failed to refresh LLM models cache for {target_label}.")
+        else:
+            logger.warning("[update_user] Models were updated, but LLM instance was not provided to refresh cache.")
+
+    # 7. Подтверждение для LLM (скрываем внутреннее векторное поле из ответа)
     changed_keys = ", ".join([k for k in update_fields.keys() if k != "aliases_vector"])
     logger.info("Successfully updated User (%s) fields: %s", target_label, changed_keys)
     return f"Success: User ({target_label}) updated. Fields changed: [{changed_keys}]."

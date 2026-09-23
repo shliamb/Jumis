@@ -70,7 +70,9 @@ class LLMWorker:
         self.active_providers: set[str] = self._get_active_providers()
         self.available_models: list[str] = []
         self.model_prices: dict[str, dict] = {}
-        self.model_default = DEFAULT_FALLBACK_MODEL
+
+        self.current_model = None
+        self.model_default = None
         self.model_cheap = None
         self.model_smart = None
 
@@ -205,14 +207,17 @@ class LLMWorker:
             admin_data = admin_data[0] if admin_data else None
 
         if not admin_data:
-            logger.warning(f"Admin profile (tg_id={self.admin_id}) not found in DB. Fallback to default.")
+            logger.warning(f"Admin profile (tg_id={self.admin_id}) not found in DB. Press - /start")
             self.model_default = DEFAULT_FALLBACK_MODEL
+            self.current_model = self.model_default
             return False
 
         # Извлекаем модели с фоллбэками
         self.model_default = admin_data.get("model_default") or DEFAULT_FALLBACK_MODEL
         self.model_cheap = admin_data.get("model_cheap")
         self.model_smart = admin_data.get("model_smart")
+
+        self.current_model = self.model_default
 
         logger.info(
             f"LLM models refreshed from DB for admin {self.admin_id}: "
@@ -361,6 +366,7 @@ class LLMWorker:
                 if 'queue_new_mess' in sig.parameters: call_kwargs['queue_new_mess'] = self.queue_new_mess
                 if 'db_tasks' in sig.parameters: call_kwargs['db_tasks'] = self.db_tasks
                 if 'scheduler' in sig.parameters: call_kwargs['scheduler'] = self.scheduler
+                if 'llm' in sig.parameters: call_kwargs['llm'] = self
 
 
                 # Вызов в зависимости от типа функции (async/sync)
@@ -486,7 +492,7 @@ class LLMWorker:
             async def stream_wrapper():
                 try:
                     response = await acompletion(
-                        model=self.model_default,
+                        model=self.current_model,
                         messages=temp_messages,
                         tools=tools,
                         stream=True,
@@ -523,7 +529,7 @@ class LLMWorker:
         # 3. ЕСЛИ ОБЫЧНЫЙ ВЫЗОВ (без стриминга)
         try:
             response = await acompletion(
-                model=self.model_default,
+                model=self.current_model,
                 messages=temp_messages,
                 tools=tools,
                 stream=False,
@@ -856,52 +862,52 @@ class LLMWorker:
 
 
 
-    async def set_active_model(self, model_name: str) -> str:
-        """ Проверяет наличие модели в LiteLLM и делает её активной """
+    # async def set_active_model(self, model_name: str) -> str:
+    #     """ Проверяет наличие модели в LiteLLM и делает её активной """
 
-        SYSTEM_CONFIG = ''
+    #     SYSTEM_CONFIG = ''
         
-        # Проверяем, знает ли LiteLLM такую модель
-        if not litellm.check_valid_model(model_name):
-            return (
-                f"❌ Модель '{model_name}' не найдена в текущей базе LiteLLM.\n"
-                f"Возможно, она выжила недавно. Попробуй сначала вызвать инструмент upgrade_litellm_system."
-            )
+    #     # Проверяем, знает ли LiteLLM такую модель
+    #     if not litellm.check_valid_model(model_name):
+    #         return (
+    #             f"❌ Модель '{model_name}' не найдена в текущей базе LiteLLM.\n"
+    #             f"Возможно, она выжила недавно. Попробуй сначала вызвать инструмент upgrade_litellm_system."
+    #         )
         
-        # Сохраняем в системное состояние / оперативку / легкий JSON
-        SYSTEM_CONFIG["active_model"] = model_name
+    #     # Сохраняем в системное состояние / оперативку / легкий JSON
+    #     SYSTEM_CONFIG["active_model"] = model_name
         
-        # Вытаскиваем сразу цены из LiteLLM для справки
-        info = litellm.model_cost.get(model_name, {})
-        input_price = info.get("input_cost_per_token", 0) * 1_000_000
-        output_price = info.get("output_cost_per_token", 0) * 1_000_000
+    #     # Вытаскиваем сразу цены из LiteLLM для справки
+    #     info = litellm.model_cost.get(model_name, {})
+    #     input_price = info.get("input_cost_per_token", 0) * 1_000_000
+    #     output_price = info.get("output_cost_per_token", 0) * 1_000_000
         
-        return f"✅ Активная модель успешно изменена на <code>{model_name}</code>!\nТариф: ${input_price:.2f} / ${output_price:.2f} за 1M токенов."
+    #     return f"✅ Активная модель успешно изменена на <code>{model_name}</code>!\nТариф: ${input_price:.2f} / ${output_price:.2f} за 1M токенов."
 
 
 
 
 
-    async def upgrade_litellm_system() -> str:
-        """ Обновляет библиотеку LiteLLM до последней версии с актуальными моделями и ценами """
+    # async def upgrade_litellm_system() -> str:
+    #     """ Обновляет библиотеку LiteLLM до последней версии с актуальными моделями и ценами """
 
-        import subprocess
-        import sys
+    #     import subprocess
+    #     import sys
 
-        try:
-            # Запускаем pip install --upgrade litellm прямо из кода
-            result = subprocess.run(
-                [sys.executable, "-m", "pip", "install", "--upgrade", "litellm"],
-                capture_output=True, text=True, check=True
-            )
+    #     try:
+    #         # Запускаем pip install --upgrade litellm прямо из кода
+    #         result = subprocess.run(
+    #             [sys.executable, "-m", "pip", "install", "--upgrade", "litellm"],
+    #             capture_output=True, text=True, check=True
+    #         )
             
-            # Перезагружаем модуль в памяти Python, чтобы подтянулся свежий model_cost.json
-            import importlib
-            importlib.reload(litellm)
+    #         # Перезагружаем модуль в памяти Python, чтобы подтянулся свежий model_cost.json
+    #         import importlib
+    #         importlib.reload(litellm)
             
-            return "✅ LiteLLM успешно обновлен до последней версии! Справочник моделей и цен актуализирован."
-        except Exception as e:
-            return f"❌ Ошибка при обновлении: {str(e)}"
+    #         return "✅ LiteLLM успешно обновлен до последней версии! Справочник моделей и цен актуализирован."
+    #     except Exception as e:
+    #         return f"❌ Ошибка при обновлении: {str(e)}"
 
 
 
