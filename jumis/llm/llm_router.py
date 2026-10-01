@@ -227,6 +227,39 @@ class LLMWorker:
 
 
 
+    def change_model(self, name_model: str = "default") -> bool:
+        """Динамическое переключение текущей активной модели (default, cheap, smart)."""
+        level = (name_model or "default").strip().lower()
+        old_model = getattr(self, "current_model", None)
+
+        if level == "default" and self.model_default:
+            self.current_model = self.model_default
+            logger.info(f"⚡ [LLM] Модель переключена: {old_model} ➡️ {self.current_model} (DEFAULT)")
+            return True
+
+        elif level == "cheap" and self.model_cheap:
+            self.current_model = self.model_cheap
+            logger.info(f"💡 [LLM] Модель переключена: {old_model} ➡️ {self.current_model} (CHEAP)")
+            return True
+
+        elif level == "smart" and self.model_smart:
+            self.current_model = self.model_smart
+            logger.info(f"🧠 [LLM] Модель переключена: {old_model} ➡️ {self.current_model} (SMART)")
+            return True
+
+        # Доп-вариант: если передали прямое имя модели (например, "anthropic/claude-3-5-sonnet")
+        elif "/" in name_model:
+            self.current_model = name_model.strip()
+            logger.info(f"🎯 [LLM] Модель кастомно переключена: {old_model} ➡️ {self.current_model}")
+            return True
+
+        else:
+            logger.error(
+                f"❌ [LLM] Не удалось переключить модель на '{name_model}'. "
+                f"Запрошенный уровень не настроен или передан неверный алиас."
+            )
+            return False
+        
 
 
     @staticmethod

@@ -72,6 +72,7 @@ def create_tables_in_db():
             model_default VARCHAR(100),                    -- Модель по умолчанию, меняется через агента, например - deepseek/deepseek-v4-flash
             model_cheap VARCHAR(100),
             model_smart VARCHAR(100),
+            -- model_super_smart VARCHAR(100), -- излишне
 
             
             created_at TIMESTAMPTZ DEFAULT NOW(),            -- Дата первого контакта

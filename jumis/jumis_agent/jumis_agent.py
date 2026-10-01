@@ -661,6 +661,12 @@ class JumisAgent:
                 else:
                     await self.bot.send_message(chat_id, error_msg, parse_mode="Markdown")
 
+            finally:
+                # Гарантированный сброс на default при любом выходе из цикла
+                if self.llm.current_model != self.llm.model_default:
+                    self.llm.change_model("default")
+                    logger.info("🔄 [Agent] Модель сессии автоматически сброшена на 'default'")
+
 
     async def send_jumis_mess_handler(self, message):
             """ Запуск Агента Jumis по входящему сообщению в телеграм бот """
@@ -773,8 +779,8 @@ class JumisAgent:
             raw_text = data.get("last_text") or ""
             safe_text = html.escape(raw_text.strip()) if raw_text.strip() else "<i>(media / empty)</i>"
             
-            if len(safe_text) > 180:
-                safe_text = safe_text[:177] + "..."
+            # if len(safe_text) > 180:
+            #     safe_text = safe_text[:177] + "..."
 
             peer_card = (
                 f"<a href=\"tg://user?id={peer_id}\"><b>{u_name_safe}</b></a> • 💬 <b>{count}</b>\n"

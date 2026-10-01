@@ -732,46 +732,71 @@ async def msg_range(
 
 
 
-async def send_mess_peer(peer_id: int, text_mess: str, mytelethon, queue_new_mess) -> str:
+async def send_mess_peer(
+    text_mess: str,
+    peer_id: int | None = None,
+    username: str | None = None,
+    mytelethon=None,
+    queue_new_mess=None
+) -> str:
     """
-    Отправляет прямое сообщение пользователю Telegram через Telethon от имени Владельца
-    и напрямую прокидывает событие в очередь для сброса виджета JumisAgent.
+    Отправляет прямое сообщение пользователю/каналу Telegram через Telethon от имени Владельца
+    и прокидывает событие в очередь для сброса виджета JumisAgent.
     """
-    if not peer_id or not text_mess or not text_mess.strip():
-        return "Error: Invalid arguments. Both 'peer_id' and non-empty 'text_mess' are required."
 
-    # Жёсткая зачистка ИИ-артефактов перед отправкой
+    # 1. Валидация входных параметров
+    if not (peer_id or username):
+        return "Error: Invalid arguments. Provide 'peer_id' or 'username'."
+    
+    if not text_mess or not text_mess.strip():
+        return "Error: Invalid arguments. Provide 'text_mess'."
+
+    # Формируем удобную метку для логов и ответов
+    target_type = "user_id" if peer_id else "username"
+    target_val = peer_id or username
+    target_str = f"{target_type}:{target_val}"
+
     clean_text = sanitize_human_text(text_mess)
-
     if not clean_text:
         return "Error: Message became empty after cleaning emojis and tags."
 
     try:
-        answer = await mytelethon.send_message(
+        answer: int | str = await mytelethon.send_message(
             message_text=clean_text,
             telegram_id=peer_id,
-            username=None
+            username=username
         )
 
-        # 1. Проверка на ошибки отправки (если отвалилось — в очередь НЕ кладем)
-        if answer is None:
-            logger.error(f"[send_mess_peer] Failed to send message to {peer_id}: returned None")
-            return f"Error: Message to {peer_id} was not sent (service returned None)."
-
+        # 2. Если вернулась строка — это ошибка отправки
         if isinstance(answer, str):
-            logger.error(f"[send_mess_peer] Telethon error for {peer_id}: {answer}")
-            return f"Error sending message to {peer_id}: {answer}"
+            logger.error(f"[send_mess_peer] Telethon error for target ({target_str}): {answer}")
+            return f"Error sending message ({target_str}): {answer}"
 
-        # 2. Успешно отправлено — извлекаем tg_msg_id и дату
+        if answer is None:
+            logger.error(f"[send_mess_peer] Failed to send message to target ({target_str}): returned None")
+            return "Error: Message was not sent (service returned None)."
 
+        # 3. Успешно отправлено — извлекаем метаданные ответа
         if isinstance(answer, int):
-            tg_msg_id, created_at = answer, get_now_datetime()
+            tg_msg_id = answer
+            created_at = get_now_datetime()
+            
+            if answer < 0:
+                text_answer = f"[send_mess_peer] Target is CHANNEL/GROUP ({target_str})"
+            else:
+                text_answer = f"[send_mess_peer] Target is USER ({target_str})"
+            
+            logger.info(text_answer)
         else:
             tg_msg_id = getattr(answer, "id", None)
             raw_date = getattr(answer, "date", None)
             created_at = to_cleen(raw_date) if isinstance(raw_date, datetime) else get_now_datetime()
+            
+            text_answer = f"[send_mess_peer] Target returned Telethon object ({target_str}) (tg_msg_id={tg_msg_id})"
+            logger.info(text_answer)
 
-        # 3. Формируем таск для воркера/JumisAgent
+
+        # 4. Формируем таск для воркера/JumisAgent 
         task_payload = {
             "chat_id": peer_id,
             "sender_id": ADMIN_ID,
@@ -785,15 +810,15 @@ async def send_mess_peer(peer_id: int, text_mess: str, mytelethon, queue_new_mes
             "created_at": created_at
         }
 
-        await queue_new_mess.put(task_payload)
-        logger.info(f"[send_mess_peer] Message successfully sent to {peer_id} (tg_msg_id={tg_msg_id}) and pushed to queue.")
+        if queue_new_mess:
+            await queue_new_mess.put(task_payload)
+            logger.info(f"[send_mess_peer] Message successfully sent to ({target_str}) (tg_msg_id={tg_msg_id}) and pushed to queue.")
 
-        return f"Success: Message successfully sent to peer_id {peer_id}."
-
+        return f"Success: Message successfully sent to ({target_str})."
+    
     except Exception as e:
-        logger.error(f"[send_mess_peer] Unexpected error for {peer_id}: {e}", exc_info=True)
+        logger.error(f"[send_mess_peer] Unexpected error for ({target_str}): {e}", exc_info=True)
         return f"Fatal error: Exception occurred while sending message: {type(e).__name__} - {str(e)}"
-
 
 
 
@@ -814,9 +839,6 @@ async def get_pending_queue(jumis_agent=None) -> str:
         return "Error: Agent service is unavailable."
 
     return await jumis_agent.get_notifs_queue()
-
-
-
 
 
 
@@ -1082,6 +1104,36 @@ async def del_task(id: int, db_tasks, scheduler) -> str:
     except Exception as e:
         logger.error(f"[del_task] Unexpected error while deleting task #{id}: {e}", exc_info=True)
         return f"{header}\n[EXCEPTION] Failed to delete task #{id} due to an internal error: {e}"
+
+
+
+###### CHANGE LLM MODEL ######
+
+async def change_model(name_model: str = "default", llm=None, **kwargs) -> str:
+    """Инструмент для смены уровня активной LLM модели."""
+    if not llm:
+        logger.error("[change_model] Сервис LLM не передан в инструмент.")
+        return "Error: LLM service is not available."
+
+    # Очищаем значение на случай лишних пробелов или регистра
+    clean_level = str(name_model).strip().lower()
+
+    # Вызываем метод переключения в экземпляре LLM
+    success = llm.change_model(name_model=clean_level)
+
+    if success:
+        current_active = getattr(llm, "current_model", clean_level)
+        logger.info(f"⚡ [Tool: change_model] Модель успешно переключена на уровень '{clean_level}' ({current_active})")
+        return f"Success: LLM model switched to level '{clean_level}' (active model: {current_active})."
+    else:
+        logger.warning(f"⚠️ [Tool: change_model] Не удалось переключить модель на уровень '{clean_level}'")
+        return f"Error: Failed to switch model to '{clean_level}'. Requested level is not configured or invalid."
+    
+
+
+
+
+
 
 
 
@@ -1371,22 +1423,25 @@ FUNCTIONS = {
     },
 
     "send_mess_peer": {
-        "description": "Sends a Telegram message to a specific user (peer_id) on behalf of the Owner. MUST be called ONLY after explicit confirmation from the Owner.",
+        "description": "Sends a Telegram message to a specific user or channel (via peer_id or username) on behalf of the Owner. MUST be called ONLY after explicit confirmation from the Owner.",
         "function": send_mess_peer,
         "schema": {
             "type": "object",
             "properties": {
                 "peer_id": {
                     "type": "integer",
-                    "description": "Telegram user ID (peer_id) of the recipient."
+                    "description": "Telegram numeric user/channel ID (peer_id) of the recipient."
                 },
-                # добавить @user_name
+                "username": {
+                    "type": "string",
+                    "description": "Telegram username (e.g., 'username' or '@username') if peer_id is unknown."
+                },
                 "text_mess": {
                     "type": "string",
                     "description": "The exact final message text approved by the Owner. MUST be plain text only: strictly NO emojis or formatting."
                 }
             },
-            "required": ["peer_id", "text_mess"]
+            "required": ["text_mess"]
         }
     },
 
@@ -1542,6 +1597,22 @@ FUNCTIONS = {
                 }
             },
             "required": ["id"]
+        }
+    },
+
+    "change_model": {
+        "description": "Switches the active LLM model power level for the current session (default, cheap, smart). Use 'smart' for complex tasks, architecture, and debugging. Use 'cheap' for simple routine operations.",
+        "function": change_model,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "name_model": {
+                    "type": "string",
+                    "enum": ["default", "cheap", "smart"],
+                    "description": "Model tier: 'default' (standard), 'cheap' (inexpensive/fast), 'smart' (advanced/capable)"
+                }
+            },
+            "required": ["name_model"]
         }
     }
 

@@ -4,7 +4,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from urllib.parse import urlparse
 from utils.common import get_now_datetime, to_app_tz_naive
-from telethon import TelegramClient, events, connection, types
+from telethon import TelegramClient, events, connection, types, utils
 
 from config import API_ID, API_HASH, USE_MTPROTO, ERR_PROXY_LIMIT
 from proxy.mtprotoproxy import MTPROXY_STRINGS
@@ -374,38 +374,98 @@ class myTelethon:
         return chunks
 
 
-    async def send_message(self, message_text: str, telegram_id: int = None, username: str = None) -> int | str:
-        """Отправить сообщение клиенту от моего личного имени через Telethon."""
+
+    async def send_message(
+            self, 
+            message_text: str, 
+            telegram_id: int | None = None, 
+            username: str | None = None
+        ) -> int | str:
+        """Отправить сообщение клиенту от моего личного имени через Telethon по 
+            username или user_id, в группу или канал, возвращает 
+            user_id/-id_canel/str - если ошибка"""
 
         if not message_text:
-            return "Ошибка: текст сообщения пуст / Error: message text is empty"
+            return "Error: message text is empty"
 
         if not self.client or not self.client.is_connected():
             print("❌ Telethon client not connected.")
-            return "❌ Ошибка: сессия Telethon не подключена. / Telethon client not connected."
+            return "❌ Error: Telethon client not connected."
 
-        target = telegram_id or (username.strip().replace("@", "") if username else None)
+        # Очищаем юзернейм от @ и пробелов
+        clean_username = username.strip().lstrip("@") if username else None
+        target = telegram_id or clean_username
 
         if not target:
-            return "Ошибка: не указан ни ID, ни Юзернейм / Error: no ID or Username provided"
+            return "Error: no ID or Username provided"
 
         try:
             # Умно нарезаем текст, если он превышает лимит MTProto
             chunks = self._split_text_smart(message_text, max_length=4000)
-
-            # Отправляем все части последовательно в один диалог
             for chunk in chunks:
                 await self.client.send_message(target, chunk)
-            
-            if isinstance(target, str):
-                entity = await self.client.get_entity(target)
-                return entity.id
-            
-            return telegram_id
-            
+
+            entity = await self.client.get_entity(target)
+            return utils.get_peer_id(entity) # int/-int - пользолватель/канал
+                    
         except Exception as e:
-            target_log = f"id: {telegram_id}" if telegram_id else f"@{username}"
+            target_log = f"id: {telegram_id}" if telegram_id else f"@{clean_username}"
             error_msg = f"Не удалось отправить сообщение на {target_log}: {e}"
             print(error_msg)
-            return f"❌ Ошибка отправки на {target_log}.\nВозможно, у вас нет открытого диалога с пользователем или он вас заблокировал."
+            return f"❌ Error sending to {target_log}.\n Error: {e}" # str
+
+
+
+
+
+
+
+
+
+
+
+
+# # Поиск приватного канала по названию среди своих диалогов:
+# async for dialog in client.iter_dialogs():
+#     if dialog.name == "Мой Рабочий Дневник":
+#         await client.send_message(dialog.id, "Текст")
+#         break
+
+
+
+
+    # async def send_message(self, message_text: str, telegram_id: int = None, username: str = None) -> int | str:
+    #     """Отправить сообщение клиенту от моего личного имени через Telethon."""
+
+    #     if not message_text:
+    #         return "Ошибка: текст сообщения пуст / Error: message text is empty"
+
+    #     if not self.client or not self.client.is_connected():
+    #         print("❌ Telethon client not connected.")
+    #         return "❌ Ошибка: сессия Telethon не подключена. / Telethon client not connected."
+
+    #     target = telegram_id or (username.strip().replace("@", "") if username else None)
+
+    #     if not target:
+    #         return "Ошибка: не указан ни ID, ни Юзернейм / Error: no ID or Username provided"
+
+    #     try:
+    #         # Умно нарезаем текст, если он превышает лимит MTProto
+    #         chunks = self._split_text_smart(message_text, max_length=4000)
+
+    #         # Отправляем все части последовательно в один диалог
+    #         for chunk in chunks:
+    #             await self.client.send_message(target, chunk)
+            
+    #         if isinstance(target, str):
+    #             entity = await self.client.get_entity(target)
+    #             return entity.id
+            
+    #         return telegram_id
+            
+    #     except Exception as e:
+    #         target_log = f"id: {telegram_id}" if telegram_id else f"@{username}"
+    #         error_msg = f"Не удалось отправить сообщение на {target_log}: {e}"
+    #         print(error_msg)
+    #         return f"❌ Ошибка отправки на {target_log}.\nВозможно, у вас нет открытого диалога с пользователем или он вас заблокировал."
 

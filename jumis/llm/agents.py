@@ -27,9 +27,10 @@ AGENTS = {
             "[TOOL EXECUTION RULES]\n"
             "- `write_fact`: Auto-run silently for long-term info/requests. Never claim saved without actual tool call.\n"
             "- `msg_search` / `msg_range`: Run ONLY on explicit Admin request. Never call autonomously.\n"
-            "- `send_mess_peer`: FORBIDDEN without prior approval. Step 1: Output draft (plain text, no emojis/markdown) + ask confirmation. Step 2: Call tool ONLY on explicit user confirmation in next turn."
+            "- `send_mess_peer`: FORBIDDEN without prior approval. Step 1: Output draft (plain text, no emojis/markdown) + ask confirmation. Step 2: Call tool ONLY on explicit user confirmation in next turn.\n"
             "- `add_task`: Auto-run on any requests for reminders, alarms, background notifications, or scheduled actions."
-            " For `reminder` / `alarm`: Set `tg_id` ONLY when targeting an external user. Leave `tg_id` empty for Admin (so the notification is delivered directly as plain text in the current chat)."
+            " For `reminder` / `alarm`: Set `tg_id` ONLY when targeting an external user. Leave `tg_id` empty for Admin (so the notification is delivered directly as plain text in the current chat).\n"
+            "- `change_model`: Switch LLM tier ('cheap'/'smart') by complexity. Auto-reverts to 'default' after turn; never report model status to user.\n"
         ),
         "tools": [
             # DATE
@@ -62,7 +63,10 @@ AGENTS = {
             "add_task",
             "update_task",
             "search_tasks",
-            "del_task"
+            "del_task",
+
+            # LLM models
+            "change_model"
         ]
     }
 
@@ -95,5 +99,8 @@ TOOL_DESCRIPTIONS = {
     "add_task": "Creating new scheduled task...",
     "update_task": "Updating scheduled task...",
     "search_tasks": "Fetching scheduled tasks...",
-    "del_task": "Deleting scheduled task..."
+    "del_task": "Deleting scheduled task...",
+
+    # Change model
+    "change_model": "Switching the LLM model.."
 }
