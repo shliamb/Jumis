@@ -1,14 +1,15 @@
-# Jumis
-
 <p align="center">
   <img src="https://img.shields.io/badge/python-3.11+-blue?style=flat-square&logo=python&logoColor=white" alt="Python">
   <img src="https://img.shields.io/badge/docker-compose-2496ED?style=flat-square&logo=docker&logoColor=white" alt="Docker">
   <img src="https://img.shields.io/badge/PostgreSQL-pgvector-4169E1?style=flat-square&logo=postgresql&logoColor=white" alt="PostgreSQL">
   <img src="https://img.shields.io/badge/aiogram-3.31-2CA5E0?style=flat-square&logo=telegram&logoColor=white" alt="aiogram">
   <img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="License">
-  <img src="https://img.shields.io/github/stars/shliamb/jumis?style=flat-square&color=yellow" alt="Stars">
-  <img src="https://img.shields.io/github/last-commit/shliamb/jumis?style=flat-square" alt="Last commit">
+  <img src="https://img.shields.io/github/stars/shliamb/Jumis?style=flat-square&color=yellow&cacheSeconds=3600" alt="Stars">
+  <img src="https://img.shields.io/github/last-commit/shliamb/Jumis?style=flat-square&cacheSeconds=3600" alt="Last commit">
+  <img src="https://img.shields.io/github/languages/top/shliamb/Jumis?style=flat-square" alt="Top language">
 </p>
+
+# 🇷🇺 Jumis
 
 > **Персональный ИИ-секретарь, который живёт в твоём Telegram.**
 > Не бот. Не автопилот. Продолжение тебя — только быстрее.
@@ -124,17 +125,7 @@ Jumis — это такой секретарь. Только он не чело�
 
 
 
-# Jumis
-
-<p align="center">
-  <img src="https://img.shields.io/badge/python-3.11+-blue?style=flat-square&logo=python&logoColor=white" alt="Python">
-  <img src="https://img.shields.io/badge/docker-compose-2496ED?style=flat-square&logo=docker&logoColor=white" alt="Docker">
-  <img src="https://img.shields.io/badge/PostgreSQL-pgvector-4169E1?style=flat-square&logo=postgresql&logoColor=white" alt="PostgreSQL">
-  <img src="https://img.shields.io/badge/aiogram-3.31-2CA5E0?style=flat-square&logo=telegram&logoColor=white" alt="aiogram">
-  <img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="License">
-  <img src="https://img.shields.io/github/stars/shliamb/jumis?style=flat-square&color=yellow" alt="Stars">
-  <img src="https://img.shields.io/github/last-commit/shliamb/jumis?style=flat-square" alt="Last commit">
-</p>
+# 🇬🇧 Jumis
 
 > **A personal AI secretary that lives inside your Telegram.**
 > Not a bot. Not an autopilot. An extension of you — just faster.
