@@ -14,3 +14,4 @@ models_cache/torch
 models_cache/embeddings
 jumis/json
 downloads
+.idea/*
