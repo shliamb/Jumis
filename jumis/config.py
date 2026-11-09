@@ -26,21 +26,26 @@ from dotenv import load_dotenv
 
 #### BASIC CONFIG (set it up manually): ####
 
-USE_PROXY = False
-USE_MTPROTO = False
 DOCKER = False
-LOG_TO_FILE = False
 HOST = "127.0.0.1" if DOCKER else  "localhost" # app_postgres localhost
 PORT = 5432 if DOCKER else 15433  # В докере стучимся на внешний порт, локально — на стандартный
 MAX_SIZE_DOC = 2 # 2 мегабайт
 TIME_ZONE = 'Europe/Moscow' # +03:00
-ERR_PROXY_LIMIT = 3
+
+
+#### LOGGING: ####
+# Один общий файл лога (ротация) + дублирование в консоль.
+# Уровень читается из .env (LOG_LEVEL), по умолчанию INFO.
+LOG_TO_CONSOLE = True
+LOG_MAX_SIZE_MB = 10
+LOG_BACKUP_COUNT = 5
 
 
 
 # #### FOLDERS: ####
 
-PATH_LOGS = "/jumis/logs/files" if DOCKER else "jumis/logs/files"
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PATH_LOGS = "/jumis/logs/files" if DOCKER else os.path.join(BASE_DIR, "jumis", "logs", "files")
 # PATH_LOGS = "/logs/" if DOCKER else "../logs/"
 DOWNLOAD = "/jumis/downloads/" if DOCKER else "jumis/downloads"
 PATH_JSON = "/jumis/json/" if DOCKER else "jumis/json"
@@ -57,6 +62,7 @@ BUFFER_IDLE_SEC: int = 30  # Пауза молчания (в сек) перед 
 # DeepSeek:
 DEFAULT_FALLBACK_MODEL = "deepseek/deepseek-v4-flash" # "gemini/gemini-3.5-flash-lite"
 LLM_TIMEOUT = 30
+LLM_TEMPERATURE = 0.1  # Для всех чат-вызовов; None — не передавать параметр (для моделей без temperature)
 HISTORY_LIMIT = 30
 """ 10–15 Строгие узкие ассистенты (только выполнить команду и дать ответ).
     20–30 Идеальный диапазон для Юмис. Естественный разговор + активный тулинг.
@@ -71,6 +77,8 @@ USE_RICH_MESSAGES = True
 #### KEYS: ####
 
 load_dotenv()
+# LOGGING (после load_dotenv, чтобы можно было переопределить из .env):
+LOG_LEVEL = os.environ.get('LOG_LEVEL', 'INFO').upper()
 # DATABASE:
 USER_DB = os.environ.get('USER_DB')
 PASSWORD_DB = os.environ.get('PASSWORD_DB')
@@ -80,11 +88,4 @@ TELEGRAM_BOT_TOKEN = os.environ.get('telegram_bot_token')
 ADMIN_ID = int(os.environ.get('admin_id'))
 API_ID = int(os.environ.get('api_id'))
 API_HASH = str(os.environ.get('api_hash'))
-
-
-
-
-# # PROXY:
-# if USE_PROXY: PROXY = os.environ.get('PROXY')
-# if not USE_PROXY: PROXY = None
 

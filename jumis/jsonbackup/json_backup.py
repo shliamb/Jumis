@@ -9,9 +9,8 @@ from decimal import Decimal
 from aiogram import types
 from typing import Any, Dict, List
 from aiogram.types import FSInputFile
-from logs.set_logger import set_logger
+from logs.set_logger import logger
 from utils.common import get_date_str
-logger = set_logger(name="backup_json")
 from config import PATH_JSON, ADMIN_ID
 
 
@@ -191,6 +190,8 @@ class JsonBackup():
         if not data:
             logger.warning(f"No data for {name_action}, skipping.")
             return
+
+        logger.info("Backup table=%s records=%d", name_action, len(data))
         
         # 1. Сохраняем чанки
         filepaths = await self.save_json_files(

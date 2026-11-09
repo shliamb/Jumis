@@ -1,7 +1,5 @@
 __pycache__/
 *.pyc
-.env.mtproxy
-.env.socks5proxy
 .env.llm
 .env
 .venv/
@@ -13,5 +11,7 @@ models_cache/huggingface
 models_cache/torch
 models_cache/embeddings
 jumis/json
+jumis/logs/files/*.log
+jumis/logs/files/*.log.*
 downloads
 .idea/*

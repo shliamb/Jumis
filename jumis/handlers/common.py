@@ -1,8 +1,7 @@
 #from database.users import get_user_by_tg
 from aiogram import types
 from config import ADMIN_ID
-from logs.set_logger import set_logger
-logger = set_logger(name="handlers")
+from logs.set_logger import logger
 
 async def typing(action):
     """ Визуализация подготовки ответа бота """

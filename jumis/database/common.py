@@ -1,7 +1,6 @@
 # database/common.py
 from config import HOST, PORT, USER_DB, PASSWORD_DB, DB_NAME, TIME_ZONE
-from logs.set_logger import set_logger
-logger = set_logger(name="db")
+from logs.set_logger import logger
 import asyncpg
 
 
@@ -30,8 +29,7 @@ class Database:
                 max_inactive_connection_lifetime=300,  # закрывать неиспользуемые через 5 мин
                 server_settings={'timezone': TIME_ZONE}
             )
-            logger.info("Database pool created")
-            print(await self.get_pool_stats())
+            logger.info("Database pool created: %s", await self.get_pool_stats())
 
         return self.pool
 
@@ -43,7 +41,7 @@ class Database:
             self.pool = None
             logger.info("Database pool closed")
             stat = await self.get_pool_stats()
-            print(f"Pool is closed {stat}")
+            logger.info("Database pool closed: %s", stat)
 
 
     async def _ensure_connected(self):

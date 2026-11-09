@@ -1,7 +1,6 @@
 # jumis/handlers/start.py
 from handlers.common import typing
-from logs.set_logger import set_logger
-logger = set_logger(name="admin")
+from logs.set_logger import logger
 
 from aiogram.filters import CommandStart
 from aiogram import Router, types, F
@@ -85,8 +84,10 @@ async def start_router(message: types.Message, db_users):
     }
 
     if await db_users.add_user(new_user_data):
+        logger.info("Admin registered: tg_id=%s username=%s", user_id, user.username)
         await message.answer(get_msg("success", lang))
     else:
+        logger.error("Failed to register admin: tg_id=%s", user_id)
         await message.answer(get_msg("error", lang))
 
     # 5. Добавить в таблицу llm_logs

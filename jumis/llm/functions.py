@@ -6,8 +6,7 @@ from utils.common import sanitize_human_text, get_now_datetime, get_date_str, to
 from datetime import datetime, timezone, timedelta
 from croniter import croniter
 from config import ADMIN_ID
-from logs.set_logger import set_logger
-logger = set_logger(name="llmfunc")
+from logs.set_logger import logger
 import json
 
 
@@ -16,6 +15,21 @@ import json
 
 # Множество для хранения ссылок на активные фоновые задачи (защита от GC в Python 3.11+)
 background_tasks = set()
+
+
+
+###### REASONING ##########
+
+
+async def think(thought: str, **kwargs) -> str:
+    """Records an internal reasoning step. Changes nothing, returns a short ack."""
+    clean = (thought or "").strip()
+    if not clean:
+        return "Error: 'thought' must not be empty."
+
+    # Мысль не сохраняем (scratchpad) и не логируем целиком — только длину.
+    logger.info("think: %d chars", len(clean))
+    return "OK"
 
 
 
@@ -1150,6 +1164,25 @@ FUNCTIONS = {
             "type": "object",
             "properties": {},
             "required": []
+        }
+    },
+
+    "think": {
+        "description": (
+            "Use this to reason privately before acting: plan a multi-step task, "
+            "choose the next tool, or verify assumptions. It changes nothing and returns OK. "
+            "Skip it for simple one-step requests; keep thoughts concise."
+        ),
+        "function": think,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "thought": {
+                    "type": "string",
+                    "description": "Private plan or self-check. Not shown to the user."
+                }
+            },
+            "required": ["thought"]
         }
     },
 

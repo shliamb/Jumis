@@ -1,7 +1,6 @@
 # database/tasks.py
 from typing import Any, Dict, List, Optional
-from logs.set_logger import set_logger
-logger = set_logger(name="db")
+from logs.set_logger import logger
 from database import db
 
 

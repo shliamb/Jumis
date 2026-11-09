@@ -4,8 +4,7 @@ import sys
 import json
 import asyncio
 from handlers.common import typing
-from logs.set_logger import set_logger
-logger = set_logger(name="admin")
+from logs.set_logger import logger, clear_logs
 from aiogram import Router, types, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -35,7 +34,9 @@ async def admin_menu(message: types.Message):
     lang = message.from_user.language_code
     user_id = message.from_user.id
     if not await rights_verification(user_id, lang, message): return
-    
+
+    logger.info("Admin menu requested: user=%s", user_id)
+
     admin_menu_ru = "\n".join([
         "<b>🎛 АДМИН-МЕНЮ</b>",
         "─────────────────",
@@ -140,6 +141,7 @@ async def reset_system(message: types.Message, bot):
     user_id = message.from_user.id
     if not await rights_verification(user_id, lang, message): return
 
+    logger.warning("System restart requested: user=%s", user_id)
     text = "🔄 *Перезапускаю систему...*" if lang == "ru" else "🔄 *Restarting system...*"
     await message.answer(text, parse_mode="Markdown")
 
@@ -497,6 +499,7 @@ async def download_json(message: types.Message, json_back):
     user_id = message.from_user.id
     if not await rights_verification(user_id, lang, message): return
 
+    logger.info("JSON backup requested: user=%s", user_id)
     await json_back.db_to_json()
 
 
@@ -636,6 +639,7 @@ async def process_json_import_file(
 
     # Скачивание файла
     filepath = os.path.join(DOWNLOAD, document.file_name)
+    logger.info("JSON import started: table=%s file=%s", name_action, document.file_name)
     await bot.download(document, destination=filepath)
 
     wait_msg = "⏳ Обрабатываю данные..." if lang == "ru" else "⏳ Processing data..."
@@ -695,22 +699,20 @@ async def admin_clear_logs(message: types.Message):
     user_id = message.from_user.id
     if not await rights_verification(user_id, lang, message): return
 
-    data_folder = Path(PATH_LOGS)
-    for entry in data_folder.iterdir():
-        if entry.is_file() and entry.stat().st_size > 0:  # Проверяем, что файл не пустой
-            file_path = str(entry.absolute())  # Получаем абсолютный путь
-
-            try:
-                with open(file_path, 'w'):
-                    pass
-                if lang == "ru": await message.answer(f"🗑 Файл '{file_path}' был очищен")
-                else: await message.answer(f"🗑 The '{file_path}' file has been clearing.")
-                await asyncio.sleep(0.5)
-
-            except Exception as e:
-                logger.error(f"Error clearing file log: {file_path}: {e}")
-                if lang == "ru": await message.answer("🚫 Ошибка при удалении логов")
-                else: await message.answer("🚫 Error deleting logs")
+    try:
+        # Пишем факт очистки до truncate, иначе эта строка останется в логе.
+        logger.info("Logs clear requested: user=%s", user_id)
+        cleared = clear_logs()
+        if cleared:
+            if lang == "ru": await message.answer(f"🗑 Очищено файлов логов: {cleared}")
+            else: await message.answer(f"🗑 Log files cleared: {cleared}")
+        else:
+            if lang == "ru": await message.answer("🚫 Файлов логов нет или они пусты")
+            else: await message.answer("🚫 No log files or they are empty")
+    except Exception as e:
+        logger.error("Error clearing logs: %s", e)
+        if lang == "ru": await message.answer("🚫 Ошибка при удалении логов")
+        else: await message.answer("🚫 Error deleting logs")
 
 
 

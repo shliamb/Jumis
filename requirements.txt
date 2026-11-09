@@ -15,7 +15,6 @@ psycopg2-binary==2.9.9
 
 # Окружение и сеть
 python-dotenv==1.1.1
-aiohttp-socks==0.8.4
 
 # Парсинг (если используешь напрямую в коде)
 lxml==5.3.0
@@ -50,9 +49,7 @@ croniter==6.2.4
 
 # pip install -r requirements.txt - чисткая установка без зависимостей
 # pip install -r requirements.txt --no-deps
-# pip install aiohttp-socks --no-deps  # без флага потянет зависимости
 # pip install telethon
-# pip install pysocks
 # sudo apt install postgresql-14-pgvector
 # pip install kairos-asr[gpu]
 # uv pip install kairos-asr[gpu]

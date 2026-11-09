@@ -28,8 +28,6 @@ services:
   #     container_name: bot_jumis
   #     env_file:
   #       - .env
-  #       - .env.mtproxy
-  #       - .env.socks5proxy
   #     environment:
   #       TZ: Europe/Moscow
   #     depends_on:

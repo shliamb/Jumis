@@ -1,142 +1,132 @@
+# jumis/logs/set_logger.py
+"""
+Единое логирование Jumis.
+
+Использование в любом модуле:
+    from logs.set_logger import logger
+    logger.info("...")
+
+Один раз при запуске (run_bot.py):
+    from logs.set_logger import logger, setup as setup_logger
+    setup_logger()
+
+Все записи идут в один файл: jumis/logs/files/jumis.log
+(плюс дублирование в консоль). Ротация — LOG_MAX_SIZE_MB * LOG_BACKUP_COUNT.
+"""
 import datetime
 import logging
+import sys
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from config import LOG_TO_FILE, PATH_LOGS, TIME_ZONE
+from config import (
+    LOG_BACKUP_COUNT,
+    LOG_LEVEL,
+    LOG_MAX_SIZE_MB,
+    LOG_TO_CONSOLE,
+    PATH_LOGS,
+    TIME_ZONE,
+)
 
 
 class TimezoneFormatter(logging.Formatter):
-    """Форматтер логов с привязкой к TIME_ZONE из конфига"""
+    """Форматтер, печатающий время в часовом поясе приложения."""
 
     def __init__(self, time_zone_str: str = TIME_ZONE, **kwargs):
         super().__init__(**kwargs)
         self.tz = ZoneInfo(time_zone_str)
 
     def formatTime(self, record, datefmt=None):
-        # Конвертируем timestamp лога напрямую в настенное время твоей зоны
         dt = datetime.datetime.fromtimestamp(record.created, tz=self.tz)
         return dt.strftime(datefmt or "%Y-%m-%d %H:%M:%S")
 
 
-def set_logger(
-    name: str,
-    log_to_file: bool = LOG_TO_FILE,
-    time_zone_str: str = TIME_ZONE,
-    log_dir: str = PATH_LOGS,
-    level=logging.INFO,
-    max_size_mb: int = 10,
-) -> logging.Logger:
-    """Настройка логгера с отображением времени по TIME_ZONE"""
+# Единственный логгер приложения. Модуль и строка вызова добавляются
+# автоматически форматтером (%(module)s:%(lineno)d).
+logger = logging.getLogger("jumis")
 
-    # Если не пишем в файл — включаем стандартные логи aiogram
-    if not log_to_file:
-        logging.getLogger("aiogram").setLevel(logging.INFO)
-        return logging
+_configured = False
 
-    # Создаем директорию для логов
-    log_path = Path(log_dir) / f"{name}.log"
-    log_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Создаем логгер
-    logger = logging.getLogger(name)
-    logger.handlers.clear()
-    logger.setLevel(level)
+def setup() -> None:
+    """Настраивает единый файл лога и консоль. Вызывать один раз при старте."""
+    global _configured
+    if _configured:
+        return
 
-    # Файловый обработчик с ротацией
-    file_handler = RotatingFileHandler(
-        filename=str(log_path),
-        maxBytes=max_size_mb * 1024 * 1024,
-        backupCount=5,
-        encoding="utf-8",
-    )
+    level = getattr(logging, str(LOG_LEVEL).upper(), logging.INFO)
 
-    # Форматтер с учетом TIME_ZONE
+    log_file = Path(PATH_LOGS) / "jumis.log"
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+
     formatter = TimezoneFormatter(
-        time_zone_str=time_zone_str,
-        fmt="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+        fmt="%(asctime)s [%(levelname)s] %(module)s:%(lineno)d: %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
+
+    root = logging.getLogger()
+    root.setLevel(level)
+
+    # Полностью подменяем обработчики root: один файл + одна консоль.
+    # Защищает от дублей, если basicConfig уже вызывался кем-то из библиотек.
+    root.handlers.clear()
+
+    file_handler = RotatingFileHandler(
+        filename=str(log_file),
+        maxBytes=LOG_MAX_SIZE_MB * 1024 * 1024,
+        backupCount=LOG_BACKUP_COUNT,
+        encoding="utf-8",
+    )
     file_handler.setFormatter(formatter)
+    root.addHandler(file_handler)
 
-    logger.addHandler(file_handler)
-    return logger
+    if LOG_TO_CONSOLE:
+        console_handler = logging.StreamHandler(sys.stdout)
+        console_handler.setFormatter(formatter)
+        root.addHandler(console_handler)
 
+    # Наш логгер пишет в root, поэтому все сообщения попадают в общий файл.
+    logger.setLevel(level)
+    logger.propagate = True
 
-# import logging
-# from config import TIME_CORRECTION, LOG_TO_FILE, PATH_LOGS
-# from pathlib import Path
-# from logging.handlers import RotatingFileHandler
-# import datetime
+    # Шумные библиотеки — только предупреждения и ошибки.
+    for noisy in ("aiogram", "telethon", "litellm", "httpx", "asyncio", "urllib3"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
 
-
-
-# class TimezoneFormatter(logging.Formatter):
-#     """Форматтер с коррекцией времени"""
-#     def __init__(self, timezone_hours: int = 0, **kwargs):
-#         super().__init__(**kwargs)
-#         self.timezone_offset = datetime.timedelta(hours=timezone_hours)
-    
-#     def formatTime(self, record, datefmt=None):
-#         dt = datetime.datetime.fromtimestamp(record.created, tz=datetime.timezone.utc)
-#         dt_local = dt + self.timezone_offset
-#         return dt_local.strftime(datefmt or '%Y-%m-%d %H:%M:%S')
+    _configured = True
 
 
+def clear_logs() -> int:
+    """Очищает все файлы логов. Активный файл не ломает позицию записи."""
+    cleared = 0
+    active_path = None
 
-# def set_logger(
-#         name: str,
-#         log_to_file: bool = LOG_TO_FILE,
-#         timezone_hours: int = TIME_CORRECTION,
-#         log_dir: str = PATH_LOGS,
-#         level = logging.INFO,
-#         max_size_mb: int = 10
-#     ) -> logging.Logger:
-#     """Настройка логгера с коррекцией времени"""
-    
-#     # Если не пишем в файл - включаем стандартные логи aiogram
-#     if not log_to_file:
-#         logging.getLogger("aiogram").setLevel(logging.INFO)
-#         return logging
-    
-#     # Создаем директорию для логов
-#     log_path = Path(log_dir) / f"{name}.log"
-#     log_path.parent.mkdir(parents=True, exist_ok=True)
-    
-#     # Создаем логгер
-#     logger = logging.getLogger(name)
-#     logger.handlers.clear()
-#     logger.setLevel(level)
-    
-#     # Файловый обработчик с ротацией
-#     file_handler = RotatingFileHandler(
-#         filename=str(log_path),
-#         maxBytes=max_size_mb * 1024 * 1024,
-#         backupCount=5,
-#         encoding='utf-8'
-#     )
-    
-#     # Форматтер с коррекцией времени
-#     formatter = TimezoneFormatter(
-#         timezone_hours=timezone_hours,
-#         fmt='%(asctime)s [%(name)s] %(levelname)s: %(message)s',
-#         datefmt='%Y-%m-%d %H:%M:%S'
-#     )
-#     file_handler.setFormatter(formatter)
-    
-#     logger.addHandler(file_handler)
-#     return logger
+    # Активный RotatingFileHandler держит открытый файл: сначала flush,
+    # затем truncate и seek(0), иначе следующие строки уйдут со старым offset.
+    for handler in logging.getLogger().handlers:
+        if isinstance(handler, RotatingFileHandler):
+            handler.acquire()
+            try:
+                handler.flush()
+                active_path = Path(handler.baseFilename)
+                active_path.write_text("", encoding="utf-8")
+                if handler.stream:
+                    handler.stream.seek(0)
+                cleared += 1
+            except Exception:
+                logger.exception("Failed to clear active log file")
+            finally:
+                handler.release()
 
+    for entry in Path(PATH_LOGS).iterdir():
+        if not entry.is_file() or entry == active_path:
+            continue
+        try:
+            if entry.stat().st_size:
+                entry.write_text("", encoding="utf-8")
+                cleared += 1
+        except Exception:
+            logger.exception("Failed to clear log file: %s", entry)
 
-
-
-# DEBUG — подробная отладочная информация
-
-# INFO — общая информация о работе
-
-# WARNING — предупреждения
-
-# ERROR — ошибки
-
-# CRITICAL — критические ошибки
+    return cleared

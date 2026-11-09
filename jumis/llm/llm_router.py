@@ -14,11 +14,10 @@ from llm.agents import AGENTS
 from llm.functions import FUNCTIONS
 from config import HISTORY_LIMIT
 from llm.token_usege import DBTokenLogger
-from config import LLM_TIMEOUT, DEFAULT_FALLBACK_MODEL, ADMIN_ID
+from config import LLM_TIMEOUT, LLM_TEMPERATURE, DEFAULT_FALLBACK_MODEL, ADMIN_ID
 
-from logs.set_logger import set_logger
+from logs.set_logger import logger
 
-logger = set_logger(name="llm")
 
 
 # Инициализируем глобальные настройки LiteLLM один раз при импорте модуля
@@ -87,6 +86,7 @@ class LLMWorker:
         self.agents = AGENTS
         self.functions = FUNCTIONS
         self.llm_timeout = LLM_TIMEOUT
+        self.llm_temperature = LLM_TEMPERATURE
 
         # SERVICE DB
         self.db_memory = db_memory
@@ -118,7 +118,7 @@ class LLMWorker:
         required_keys = ["DEEPSEEK_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "XAI_API_KEY"]
         missing = [key for key in required_keys if not os.getenv(key)]
         if missing:
-            print(f"⚠️ [LLMWorker Warning] Следующие ключи не найдены в .env.llm: {', '.join(missing)}")
+            logger.warning("Missing API keys in .env.llm: %s", ", ".join(missing))
 
 
     def _get_active_providers(self) -> set[str]:
@@ -518,7 +518,16 @@ class LLMWorker:
         # Сохраняем слепок перед запросом ТОЛЬКО для главного агента
         backup_dialog = copy.deepcopy(self.dialog) if not is_subagent else None
 
-        print("\nDIALOG:", json.dumps(temp_messages, indent=2, ensure_ascii=False, default=str), "\n")
+        # Метаданные запроса без содержимого диалога (приватность)
+        logger.info(
+            "LLM request: model=%s messages=%d tools=%d temperature=%s",
+            self.current_model, len(temp_messages), len(tools or []), self.llm_temperature,
+        )
+
+        # Единая температура для всех вызовов. None — параметр не передаётся.
+        request_kwargs = {}
+        if self.llm_temperature is not None:
+            request_kwargs["temperature"] = self.llm_temperature
 
         # 2. ЕСЛИ ВКЛЮЧЕН СТРИМИНГ
         if stream:
@@ -529,7 +538,8 @@ class LLMWorker:
                         messages=temp_messages,
                         tools=tools,
                         stream=True,
-                        timeout=self.llm_timeout
+                        timeout=self.llm_timeout,
+                        **request_kwargs,
                     )
 
                     async for chunk in response:
@@ -566,7 +576,8 @@ class LLMWorker:
                 messages=temp_messages,
                 tools=tools,
                 stream=False,
-                timeout=self.llm_timeout
+                timeout=self.llm_timeout,
+                **request_kwargs,
             )
             if not is_subagent:
                 self.old_dialog = copy.deepcopy(self.dialog)
@@ -637,42 +648,9 @@ class LLMWorker:
         if cut >= len(self.dialog):
             cut = len(self.dialog) - self.history_limit
 
-        print(f"\ntrim: YES (removed {cut} messages)\n")
+        logger.debug("Dialog trimmed: removed %d messages", cut)
         self.dialog = self.dialog[cut:]
 
-
-    # def _safe_trim(self):
-    #     """Обрезает диалог до history_limit, не разрывая пары assistant(tool_calls) ↔ tool."""
-    #     Рабочий 
-    #     if len(self.dialog) <= self.history_limit:
-    #         print("\ntrim: NO\n")
-    #         return
-            
-    #     # Сдвигаем точку обрезки вправо, пока не окажемся в безопасной позиции
-    #     cut = len(self.dialog) - self.history_limit
-    #     while cut < len(self.dialog):
-    #         msg = self.dialog[cut]
-    #         # Нельзя начинать с tool
-    #         if msg.get('role') == 'tool':
-    #             cut += 1
-    #             continue
-    #         # Нельзя начинать с assistant, у которого есть tool_calls (если за ним не идут все соответствующие tool)
-    #         if msg.get('role') == 'assistant' and msg.get('tool_calls'):
-    #             expected_ids = {tc['id'] for tc in msg['tool_calls']}
-    #             found_ids = set()
-    #             for m in self.dialog[cut+1:]:
-    #                 if m.get('role') == 'tool':
-    #                     if m.get('tool_call_id') in expected_ids:
-    #                         found_ids.add(m['tool_call_id'])
-    #                 else:
-    #                     break
-    #             if found_ids != expected_ids:
-    #                 cut += 1
-    #                 continue
-    #         break
-            
-    #     print("\ntrim: YES\n")
-    #     self.dialog = self.dialog[cut:]
 
 
 
@@ -721,7 +699,7 @@ class LLMWorker:
         """ Простой стрим ответ от LLM без вызова функций + сохранение диалога"""
 
         if not system:
-            print("Error: where is System content?")
+            logger.error("System content is required")
             return
 
         collected_content = ""
@@ -865,82 +843,4 @@ class LLMWorker:
             ]
 
         return result
-
-
-
-    ######## LITE LLM  ###########
-
-
-
-
-    # import litellm
-
-    # # 1. Проверить, знает ли LiteLLM эту модель
-    # is_valid = litellm.check_valid_model(model="gemini/gemini-2.5-flash") # True / False
-
-    # # 2. Получить список ВСЕХ поддерживаемых моделей (их там сотни)
-    # all_models = list(litellm.model_cost.keys())
-
-    # # 3. Найти модели конкретного провайдера (например, deepseek или gemini)
-    # deepseek_models = [m for m in litellm.model_cost if "deepseek" in m]
-
-
-
-
-    # from litellm import completion_cost
-
-    # # Передаешь ответ от acompletion — получаешь точную стоимость запроса в $
-    # cost = completion_cost(completion_response=response)
-    # print(f"Запрос стоил: ${cost:.6f}")
-
-
-
-    # async def set_active_model(self, model_name: str) -> str:
-    #     """ Проверяет наличие модели в LiteLLM и делает её активной """
-
-    #     SYSTEM_CONFIG = ''
-        
-    #     # Проверяем, знает ли LiteLLM такую модель
-    #     if not litellm.check_valid_model(model_name):
-    #         return (
-    #             f"❌ Модель '{model_name}' не найдена в текущей базе LiteLLM.\n"
-    #             f"Возможно, она выжила недавно. Попробуй сначала вызвать инструмент upgrade_litellm_system."
-    #         )
-        
-    #     # Сохраняем в системное состояние / оперативку / легкий JSON
-    #     SYSTEM_CONFIG["active_model"] = model_name
-        
-    #     # Вытаскиваем сразу цены из LiteLLM для справки
-    #     info = litellm.model_cost.get(model_name, {})
-    #     input_price = info.get("input_cost_per_token", 0) * 1_000_000
-    #     output_price = info.get("output_cost_per_token", 0) * 1_000_000
-        
-    #     return f"✅ Активная модель успешно изменена на <code>{model_name}</code>!\nТариф: ${input_price:.2f} / ${output_price:.2f} за 1M токенов."
-
-
-
-
-
-    # async def upgrade_litellm_system() -> str:
-    #     """ Обновляет библиотеку LiteLLM до последней версии с актуальными моделями и ценами """
-
-    #     import subprocess
-    #     import sys
-
-    #     try:
-    #         # Запускаем pip install --upgrade litellm прямо из кода
-    #         result = subprocess.run(
-    #             [sys.executable, "-m", "pip", "install", "--upgrade", "litellm"],
-    #             capture_output=True, text=True, check=True
-    #         )
-            
-    #         # Перезагружаем модуль в памяти Python, чтобы подтянулся свежий model_cost.json
-    #         import importlib
-    #         importlib.reload(litellm)
-            
-    #         return "✅ LiteLLM успешно обновлен до последней версии! Справочник моделей и цен актуализирован."
-    #     except Exception as e:
-    #         return f"❌ Ошибка при обновлении: {str(e)}"
-
-
 

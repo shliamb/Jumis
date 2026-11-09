@@ -1,6 +1,5 @@
 #! master/utils/serialize.py
-from logs.set_logger import set_logger
-logger = set_logger(name="serialize")
+from logs.set_logger import logger
 from datetime import datetime, date
 from decimal import Decimal, InvalidOperation
 from uuid import UUID

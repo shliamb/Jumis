@@ -1,6 +1,7 @@
 # jumis/llm/token_usege.py
 import json
 from litellm.integrations.custom_logger import CustomLogger # Импортируем базовый класс для логирования
+from logs.set_logger import logger
 
 
 
@@ -28,22 +29,14 @@ class DBTokenLogger(CustomLogger):
             # Магия здесь: если там None, оператор "or 0" жестко превратит его в 0
             cached_tokens = prompt_details.get("cached_tokens") or 0
 
-            # 3. Выводим красивый структурированный отчет в терминал
-            print("\n" + "=" * 60)
-            print(f"📊 [АНАЛИТИКА ТРАФИКА ЛЛМ] | Модель: {model}")
-            print("-" * 60)
-            print(f" 📥 Вход (Prompt):       {prompt_tokens} ток.")
-            if cached_tokens > 0:
-                print(f"    └─ ⚡ ИЗ НИХ В КЭШЕ:  {cached_tokens} ток. (Скидка! 🎉)")
-            else:
-                print(f"    └─ ⚡ ИЗ НИХ В КЭШЕ:  0 ток. (Чистый запрос)")
-                
-            print(f" 📤 Выход (Completion):  {completion_tokens} ток.")
-            print(f" 🔄 Всего (Total):       {total_tokens} ток.")
-            print("-" * 60)
-            
+            # 3. Пишем компактную строку в общий лог
+            logger.info(
+                "LLM usage: model=%s prompt=%d cached=%d completion=%d total=%d",
+                model, prompt_tokens, cached_tokens, completion_tokens, total_tokens,
+            )
+
         else:
-            print(f"\n[Учет] Не удалось вытащить объект usage для модели {model}")
+            logger.warning("LLM usage unavailable: model=%s", model)
 
 
 

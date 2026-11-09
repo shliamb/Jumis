@@ -4,6 +4,7 @@ import asyncio
 import torch
 from sentence_transformers import SentenceTransformer
 from typing import List, Union
+from logs.set_logger import logger
 
 # Путь к папке models в корне проекта Jumis
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -24,13 +25,13 @@ class TextEmbedder:
         self.cache_dir = MODELS_DIR
         
         # Загружаем модель (если нет локально в models/ — скачает туда один раз)
-        print(f"📦 Инициализация эмбеддера на [{self.device.upper()}]...")
+        logger.info("Embedder init: model=%s device=%s", self.model_name, self.device)
         self.model = SentenceTransformer(
             model_name_or_path=self.model_name,
             device=self.device,
             cache_folder=self.cache_dir
         )
-        print(f"✅ Модель векторизации готова к работе.")
+        logger.info("Embedder ready: model=%s", self.model_name)
 
     def _encode_sync(self, texts: Union[str, List[str]]) -> List[List[float]]:
         """ Внутренний синхронный метод генерации векторов на GPU """

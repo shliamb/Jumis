@@ -5,8 +5,7 @@ from croniter import croniter
 from typing import Any, Dict, Optional
 from config import ADMIN_ID
 from utils.common import get_now_datetime, to_cleen, get_date_str, to_app_tz_naive
-from logs.set_logger import set_logger
-logger = set_logger(name="scheduler")
+from logs.set_logger import logger
 
 
 

@@ -15,8 +15,7 @@ from pydantic import ValidationError
 from aiogram.methods import SendRichMessage
 from aiogram.types import InputRichMessage
 from config import ADMIN_ID, USE_RICH_MESSAGES
-from logs.set_logger import set_logger
-logger = set_logger(name="jumis_agent")
+from logs.set_logger import logger
 
 
 
@@ -344,7 +343,7 @@ class JumisAgent:
         # 1. РЕЖИМ RICH MESSAGES (без принудительного разбиения)
         # =========================================================================
         if use_rich:
-            print("\nRICH MESSAGES\n")
+            logger.debug("Response mode: rich")
             try:
                 rich_html = self.markdown_to_rich_html(llm_response)
 
@@ -392,7 +391,7 @@ class JumisAgent:
         final_html = self.markdown_to_telegram_html(llm_response)
         chunks = self.split_html_text(final_html, max_length=4000)
 
-        print("\nHTML Fallback\n")
+        logger.debug("Response mode: HTML fallback")
 
         try:
             if chunks:
@@ -425,7 +424,7 @@ class JumisAgent:
         
         plain_chunks = [clean_text[i:i+4000] for i in range(0, len(clean_text), 4000)] if clean_text else [llm_response[:4000]]
 
-        print("\nEMERGENCY MODE\n")
+        logger.debug("Response mode: plain text (emergency)")
 
         await self.bot.edit_message_text(
             chat_id=chat_id,
@@ -497,6 +496,7 @@ class JumisAgent:
                 
                 # Отправляем начальную плашку в чат
                 msg = await self.bot.send_message(chat_id, "...")
+                logger.info("Agent request: chat_id=%s prompt_len=%d", chat_id, len(prompt_text))
 
                 # 1. Проверяем и инжектим уведомление о неотвеченных (если они есть)
                 await self.check_notif_mess()
@@ -557,6 +557,10 @@ class JumisAgent:
 
                     # 2. ВЫЗОВ ФУНКЦИЙ (ТУЛЗОВ)
                     if has_tool_calls:
+                        logger.info(
+                            "Agent tool calls: %s",
+                            ", ".join(tc['name'] for tc in tool_calls_info),
+                        )
                         tool_calls_for_msg = []
                         for tc in tool_calls_info:
                             tool_calls_for_msg.append({
@@ -625,6 +629,7 @@ class JumisAgent:
                         # Успешный ответ
                         await self.llm.add_assistant_message(content=stream_text)
                         full_text += stream_text
+                        logger.info("Agent response: chat_id=%s chars=%d", chat_id, len(full_text))
                         
                         await self.send_jumis_response(
                             chat_id=chat_id,

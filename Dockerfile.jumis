@@ -21,10 +21,8 @@ COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
 # 3. Ставим специфичные тяжелые библиотеки (+ soundfile)
-RUN pip install --no-cache-dir aiohttp-socks --no-deps && \
-    pip install --no-cache-dir \
+RUN pip install --no-cache-dir \
     telethon \
-    pysocks \
     Pillow \
     ultralytics \
     soundfile \

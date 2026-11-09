@@ -1,7 +1,6 @@
 # database/memories.py
 from typing import Optional
-from logs.set_logger import set_logger
-logger = set_logger(name="db")
+from logs.set_logger import logger
 from database import db
 
 
@@ -58,7 +57,6 @@ class DBMemories():
             return True  # Подтверждаем успешную запись
             
         except Exception as e:
-            print(f"Error adding category to DB: {e}")
             logger.error(f"Error adding category to DB: {e}")
             return False
 

@@ -1,40 +1,21 @@
 # master/telethoner/mytelethon.py
 import asyncio
 from datetime import datetime
-from zoneinfo import ZoneInfo
-from urllib.parse import urlparse
 from utils.common import get_now_datetime, to_app_tz_naive
-from telethon import TelegramClient, events, connection, types, utils
+from telethon import TelegramClient, events, types, utils
 
-from config import API_ID, API_HASH, USE_MTPROTO, ERR_PROXY_LIMIT
-from proxy.mtprotoproxy import MTPROXY_STRINGS
-from logs.set_logger import set_logger
+from config import API_ID, API_HASH
+from logs.set_logger import logger
 
-logger = set_logger(name="telethon")
 
 
 
 
 class myTelethon:
     def __init__(self, queue_messages):
-        self.use_proxy = USE_MTPROTO
-        self.proxy_strings = MTPROXY_STRINGS if self.use_proxy else []
         self.client = None
-        self.current_proxy_index = -1   # индекс последнего успешного прокси
-        self.error_limit = ERR_PROXY_LIMIT
         self.queue_messages = queue_messages
         self.me_id = None
-
-
-    def _parse_proxy_str(self, proxy_str: str):
-        """Преобразует строку вида mtproxy://host:port:secret в кортеж (host, port, secret)"""
-        parts = proxy_str.replace('mtproxy://', '').split(':')
-        host = parts[0]
-        port = int(parts[1])
-        secret = parts[2]   # hex-строка
-        return (host, port, secret)
-
-
 
 
     async def detect_media_info(self, event) -> dict:
@@ -104,23 +85,9 @@ class myTelethon:
 
 
 
-    def _connect_proxy(self, proxy_tuple=None):
-        """
-        Создаёт клиента Telethon с указанным прокси (или без).
-        Регистрирует обработчик сообщений.
-        """
-        if proxy_tuple:
-            host, port, secret = proxy_tuple
-            self.client = TelegramClient(
-                'session_jumis',
-                API_ID,
-                API_HASH,
-                proxy=(host, port, secret),
-                connection=connection.ConnectionTcpMTProxyRandomizedIntermediate,
-                auto_reconnect=False   # отключаем встроенный reconnect
-            )
-        else:
-            self.client = TelegramClient('session_jumis', API_ID, API_HASH)
+    def _create_client(self):
+        """Создаёт клиента Telethon и регистрирует обработчики сообщений."""
+        self.client = TelegramClient('session_jumis', API_ID, API_HASH)
 
 
 
@@ -279,72 +246,44 @@ class myTelethon:
 
 
 
-    async def _try_connect(self):
-        """
-        Перебирает прокси по кругу (начиная со следующего за последним успешным),
-        пытается подключиться. При успехе сохраняет индекс и возвращает True.
-        Если ни один не подошёл, возвращает False.
-        """
-        if not self.proxy_strings:
-            # без прокси
-            self._connect_proxy(None)
+    async def _disconnect(self):
+        """Аккуратно отключает текущий клиент Telethon."""
+        if self.client:
             try:
-                await self.client.connect()
-                print("✅ Connected without proxy")
-                return True
-            except Exception as e:
-                print(f"❌ Connection without proxy failed: {e}")
-                self.client = None
-                return False
-
-        # Начинаем со следующего индекса
-        start = (self.current_proxy_index + 1) % len(self.proxy_strings)
-        for i in range(len(self.proxy_strings)):
-            idx = (start + i) % len(self.proxy_strings)
-            proxy_str = self.proxy_strings[idx]
-            proxy_tuple = self._parse_proxy_str(proxy_str)
-            print(f"🔄 Trying MTProxy {proxy_tuple[0]}:{proxy_tuple[1]}...")
-            self._connect_proxy(proxy_tuple)
-            try:
-                await self.client.connect()
-                # Успешно – сохраняем индекс
-                self.current_proxy_index = idx
-                print(f"✅ Connected via MTProxy {proxy_tuple[0]}:{proxy_tuple[1]}")
-                return True
-            except Exception as e:
-                print(f"❌ Failed: {e}")
                 await self.client.disconnect()
+            except Exception as e:
+                logger.warning("Telethon disconnect error: %s", e)
+            finally:
                 self.client = None
-                continue
-
-        print("❌ No working MTProxy found")
-        return False
 
 
     async def run(self):
         """
-        Основной цикл: пытается подключиться с ротацией прокси,
-        затем запускает run_until_disconnected, переподключаясь при обрыве.
+        Основной цикл: подключается к Telegram и слушает сообщения.
+        Telethon сам переподключается при сетевых обрывах (auto_reconnect=True),
+        а внешний цикл страхует холодный старт и полностью потерянное соединение.
         """
-        if not await self._try_connect():
-            return
-
-        consecutive_errors = 0
         while True:
             try:
+                # Пересоздаём клиента, чтобы после сбоя не тянуть битое соединение
+                self._create_client()
                 await self.client.start()
-                print("✅ Telethon started, listening...")
+                logger.info("Telethon connected, listening")
                 await self.client.run_until_disconnected()
+
+            except asyncio.CancelledError:
+                await self._disconnect()
+                raise
+
             except Exception as e:
-                print(f"⚠️ Telethon connection lost: {e}")
-                consecutive_errors += 1
-                if consecutive_errors > self.error_limit:
-                    # Переключаем прокси
-                    if not await self._try_connect():
-                        print("❌ No working proxy, exiting")
-                        break
-                    consecutive_errors = 0
-                await asyncio.sleep(1)
+                logger.warning("Telethon connection lost: %s", e)
+                await self._disconnect()
+                await asyncio.sleep(5)
+
+
+    async def stop(self):
+        """Остановка клиента при завершении приложения."""
+        await self._disconnect()
 
 
     @staticmethod
@@ -389,7 +328,7 @@ class myTelethon:
             return "Error: message text is empty"
 
         if not self.client or not self.client.is_connected():
-            print("❌ Telethon client not connected.")
+            logger.error("Telethon client is not connected")
             return "❌ Error: Telethon client not connected."
 
         # Очищаем юзернейм от @ и пробелов
@@ -411,7 +350,7 @@ class myTelethon:
         except Exception as e:
             target_log = f"id: {telegram_id}" if telegram_id else f"@{clean_username}"
             error_msg = f"Не удалось отправить сообщение на {target_log}: {e}"
-            print(error_msg)
+            logger.error(error_msg)
             return f"❌ Error sending to {target_log}.\n Error: {e}" # str
 
 

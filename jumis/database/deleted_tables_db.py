@@ -1,6 +1,5 @@
 #! master/database/deleted_tables_db.py
-from logs.set_logger import set_logger
-logger = set_logger(name="db")
+from logs.set_logger import logger
 from database import db
 import asyncio
 

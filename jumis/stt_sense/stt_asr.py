@@ -6,9 +6,8 @@ import os
 import numpy as np
 import soundfile as sf
 from kairos_asr import KairosASR
-from logs.set_logger import set_logger
+from logs.set_logger import logger
 
-logger = set_logger(name="stt")
 
 
 
@@ -16,11 +15,11 @@ logger = set_logger(name="stt")
 class FastTranscriber:
 
     def __init__(self, device: str = "cuda"):
-        print("Loading Kairos ASR model (sync init)...")
+        logger.info("Loading Kairos ASR model (device=%s)", device)
         self.asr = KairosASR(device=device)
         self._warmup()
         self._lock: Optional[asyncio.Lock] = None  # Очередь доступа к GPU
-        print("Model ready.")
+        logger.info("Kairos ASR model ready")
 
     def _warmup(self):
         """Синхронный прогрев видеокарты при старте."""

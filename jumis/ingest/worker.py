@@ -3,9 +3,8 @@ from config import ADMIN_ID
 import asyncio
 from vector import embedder
 from stt_sense import stt
-from logs.set_logger import set_logger
+from logs.set_logger import logger
 
-logger = set_logger(name="ingest")
 
 
 
@@ -97,6 +96,7 @@ class IngestionWorker:
                 logger.info(f"[STT] Расшифровка голосового из RAM для chat_id={chat_id}...")
                 transcribed_text = await stt.transcribe(audio_bytes, file_extension=".ogg")
                 content = transcribed_text.strip() if (transcribed_text and transcribed_text.strip()) else "[Голосовое сообщение без речи]"
+                logger.info("[STT] Transcribed chat_id=%s chars=%d", chat_id, len(content or ""))
             except Exception as e:
                 logger.error(f"[STT] Ошибка расшифровки аудио для chat_id={chat_id}: {e}")
                 content = "[Ошибка расшифровки голосового]"
@@ -104,8 +104,7 @@ class IngestionWorker:
         # VOICE + FAVORITES MESSAGES
         if is_favourites:
             if msg_type == "voice":
-                preview = f"{content[:30]}..." if content and len(content) > 30 else content
-                logger.info(f"[ResponseWorker] Голосовое из Избранного: {preview}")
+                logger.info("[STT] Favorites voice transcribed: chat_id=%s chars=%d", chat_id, len(content or ""))
                 # Отправляем расшифрованный текст обратно в Избранное
                 await self.telethon_client.send_message(message_text=content, telegram_id=chat_id, username=None)
             return

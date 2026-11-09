@@ -1,13 +1,17 @@
 # ! jumi/run_bot.py
 import asyncio
-import aiohttp
 # from datetime import datetime
 # import json
-from aiogram import Router
-from config import TELEGRAM_BOT_TOKEN, USE_PROXY, ADMIN_ID
-from proxy.socks5proxy import SOCKS5PROXY_STRINGS
-from bot_instance import AioBot
-from python_socks._errors import ProxyError
+from aiogram import Bot, Router
+from aiogram.client.default import DefaultBotProperties
+from aiogram.enums import ParseMode
+from config import TELEGRAM_BOT_TOKEN, ADMIN_ID
+from logs.set_logger import logger, setup as setup_logger
+
+# Логирование настраивается до импорта тяжёлых модулей (эмбеддер, STT, LLM),
+# чтобы их сообщения при инициализации тоже попали в общий файл.
+setup_logger()
+
 # from utils.serialize import serialize_for_json
 from llm.llm_router import LLMWorker
 from database.memories import DBMemories
@@ -19,14 +23,6 @@ from scheduler.scheduler import SmartScheduler
 from jumis_agent.jumis_agent import JumisAgent
 from jsonbackup.json_backup import JsonBackup
 
-
-import logging
-logging.basicConfig(level=logging.INFO)
-logging.getLogger('aiogram').setLevel(logging.DEBUG)
-
-# from logs.set_logger import set_logger
-# logger = set_logger(name="bot")
-
 from handlers import ALL_ROUTERS
 from database import db
 from handlers.dispatcher import dp
@@ -35,20 +31,11 @@ from telethoner.worker_telethon import myTelethon
 from ingest.worker import IngestionWorker
 
 
-# В AioBot производится ротирование прокси
-# При обрыве, прокси должен сам переподключиться к лушему по ping
-bot_instance = AioBot(USE_PROXY, SOCKS5PROXY_STRINGS, TELEGRAM_BOT_TOKEN)
 
 
 
 
 
-
-async def get_bot_id():
-    """ Получить telegram id bot """
-    bot = bot_instance.bot
-    me = await bot.get_me()
-    return me.id
 
 
 async def init_router() -> None:
@@ -70,7 +57,7 @@ async def send_startup_greeting(db_users, jumis_agent):
         if user_data:
             lang_user = user_data[0].get("lang_code")
     except Exception as e:
-        print(f"Не удалось получить lang_code для ADMIN_ID ({ADMIN_ID}): {e}")
+        logger.warning("Failed to get lang_code for ADMIN_ID=%s: %s", ADMIN_ID, e)
 
     prompt_to_agent = (
         f"[SYSTEM TRIGGER: STARTUP]\n"
@@ -79,7 +66,10 @@ async def send_startup_greeting(db_users, jumis_agent):
     if lang_user:
         prompt_to_agent += f"\n[USER LANGUAGE: {lang_user}]"
 
-    await jumis_agent.process_agent_request(chat_id=ADMIN_ID, prompt_text=prompt_to_agent)
+    try:
+        await jumis_agent.process_agent_request(chat_id=ADMIN_ID, prompt_text=prompt_to_agent)
+    except Exception as e:
+        logger.warning("Failed to send startup greeting: %s", e)
 
 
 
@@ -89,11 +79,11 @@ async def send_startup_greeting(db_users, jumis_agent):
 #### Запуск Телеграмм Бота #####
 async def main_bot() -> None:
     """ Главная функция запуска и инициализации всей системы """
-    print("Запуск системы...")
+    logger.info("=== Jumis starting ===")
 
     # Подключение к базе данных
     await db.connect()
-    print("Успешное подключение к PostgreSQL.")
+    logger.info("PostgreSQL connected")
 
     db_messages = DBMessages()
     db_tasks = DBTasks()
@@ -103,17 +93,17 @@ async def main_bot() -> None:
     db_memory = DBMemories()
     try:
         await db_memory.init()
-        print("Инициализация памяти успешно прошла")
-    except:
-        print("База памяти не инициализирована")
+        logger.info("Memory categories initialized")
+    except Exception:
+        logger.warning("Memory categories are not initialized", exc_info=True)
 
     # Инициализация пользователей (загружает категории в кэш self)
     db_users = DBUsers()
     try:
         await db_users.init()
-        print("Инициализация пользователей успешно прошла")
-    except:
-        print("База пользователей не инициализирована")
+        logger.info("User categories initialized")
+    except Exception:
+        logger.warning("User categories are not initialized", exc_info=True)
 
     dp["db_users"] = db_users # для хендлера start ..
 
@@ -147,20 +137,20 @@ async def main_bot() -> None:
 
     # Проверим динамическое получение категорий фактов:
     facts_category = await llm.get_tools_for_agent(["write_fact"])
-    print("Сгенерированный enum фактов:", facts_category[0]["function"]["parameters"]["properties"]["facts_category"].get("enum"))
+    logger.debug("Fact categories enum: %s", facts_category[0]["function"]["parameters"]["properties"]["facts_category"].get("enum"))
 
     # Проверим динамическое получение категорий пользователей:
     user_category = await llm.get_tools_for_agent(["update_user"])
-    print("Сгенерированный enum пользователей:", user_category[0]["function"]["parameters"]["properties"]["user_category"].get("enum"))
+    logger.debug("User categories enum: %s", user_category[0]["function"]["parameters"]["properties"]["user_category"].get("enum"))
 
-    # Создание бота и подключение роутеров
-    await bot_instance.create_bot()
-    dp.bot = bot_instance.bot
+    # Создание бота (aiogram сам восстанавливает polling после сетевых сбоев)
+    bot = Bot(
+        TELEGRAM_BOT_TOKEN,
+        default=DefaultBotProperties(parse_mode=ParseMode.HTML)
+    )
+    dp.bot = bot
     await init_router()
-
-    if bot_instance.bot is None:
-        print("Не удалось создать экземпляр бота! Завершение работы.")
-        return
+    logger.info("Bot created: id=%s", bot.id)
 
     # Инициализация
     ingestion_worker = IngestionWorker(
@@ -193,56 +183,66 @@ async def main_bot() -> None:
     scheduler.set_agent(jumis_agent)
     scheduler.set_bot(dp.bot)
 
-    print("Все сервисы запускаются...")
+    logger.info("Starting services: aiogram polling, telethon, ingest, agent")
 
-    # Флаг для однократного запуска приветствия (защита от реконнектов)
+    # Флаг для однократного запуска приветствия (защита от перезапусков)
     is_first_start = True
 
     try:
+        # Планировщик сам создаёт свои фоновые воркеры и сразу возвращает управление.
+        # Запускаем его один раз, чтобы при перезапуске сервисов не плодить дубли.
+        await scheduler.run()
+
         while True:
-            try:
-                if bot_instance.bot is None:
-                    print("Бот не создан, ждём...")
-                    await asyncio.sleep(5)
-                    continue
-
-                # Запускаем приветствие как неблокирующую фоновую задачу
-                # Только при САМОМ ПЕРВОМ успешном входе в рабочий цикл
-                if is_first_start:
-                    asyncio.create_task(
-                        send_startup_greeting(db_users, jumis_agent)
-                    )
-                    is_first_start = False
-
-                # Запуск сервисов в фоне: держит выполнение, а при сбое любого — уходит на перезапуск.
-                await asyncio.gather(
-                    dp.start_polling(dp.bot, skip_updates=False),
-                    mytelethon.run(),
-                    ingestion_worker.run(),
-                    jumis_agent.run_queue_worker(),
-                    scheduler.run()
+            # Запускаем приветствие как неблокирующую фоновую задачу
+            # Только при САМОМ ПЕРВОМ входе в рабочий цикл
+            if is_first_start:
+                asyncio.create_task(
+                    send_startup_greeting(db_users, jumis_agent)
                 )
+                is_first_start = False
 
-            except (aiohttp.ClientConnectorError, aiohttp.ClientProxyConnectionError, ProxyError):
-                # Перепроверить позже, чую там пизда..
-                print("Прокси ошибка, переподключаемся...")
-                await bot_instance.reconnect()
-                dp.bot = bot_instance.bot
-                await asyncio.sleep(5)
+            # Сервисы запускаются отдельными задачами: при сбое одного
+            # остальные корректно отменяются и всё перезапускается вместе.
+            services = [
+                asyncio.create_task(
+                    dp.start_polling(
+                        dp.bot,
+                        skip_updates=False,
+                        handle_signals=False,
+                        close_bot_session=False,
+                    ),
+                    name="aiogram_polling",
+                ),
+                asyncio.create_task(mytelethon.run(), name="telethon"),
+                asyncio.create_task(ingestion_worker.run(), name="ingest"),
+                asyncio.create_task(jumis_agent.run_queue_worker(), name="jumis_agent"),
+            ]
 
-            except Exception as e:
-                # Перепроверить позже, чую там пизда..
-                print(f"Другая ошибка: {e}")
-                await bot_instance.reconnect()
-                dp.bot = bot_instance.bot
-                await asyncio.sleep(5)
+            try:
+                await asyncio.gather(*services)
 
             except asyncio.CancelledError:
-                print("📢 Бот получил сигнал остановки")
+                # Остановка процесса: гасим сервисы и выходим
+                for task in services:
+                    task.cancel()
+                await asyncio.gather(*services, return_exceptions=True)
                 raise
 
+            except Exception:
+                # Локальный сбой сервиса: перезапускаем весь набор
+                logger.exception("Service crashed; restarting in 5 seconds")
+                for task in services:
+                    task.cancel()
+                await asyncio.gather(*services, return_exceptions=True)
+                await asyncio.sleep(5)
+
+    except asyncio.CancelledError:
+        logger.info("Stop signal received")
+        raise
+
     finally:
-        print("Остановка сервисов и очистка ресурсов...")
+        logger.info("Shutting down: closing Telethon, bot session, DB, scheduler")
 
         # 1. Отключаем клиент Telethon
         await mytelethon.stop() # или await mytelethon.client.disconnect()
@@ -257,16 +257,18 @@ async def main_bot() -> None:
         # 4. Останавливаем планировщик тасок
         await scheduler.stop()
 
-        print("Все соединения закрыты. Завершение работы выполнено успешно.")
+        logger.info("=== Jumis stopped ===")
 
 
 if __name__ == "__main__":
     try:
         asyncio.run(main_bot())
     except KeyboardInterrupt:
-        print("\n🛑 Ctrl+C - остановка")
+        logger.info("Ctrl+C - stop")
+    except Exception:
+        logger.exception("Fatal error")
     finally:
-        print("Завершение работы...")
+        logger.info("Exit")
 
 
 

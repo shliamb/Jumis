@@ -31,8 +31,12 @@ AGENTS = {
             "- `add_task`: Auto-run on any requests for reminders, alarms, background notifications, or scheduled actions."
             " For `reminder` / `alarm`: Set `tg_id` ONLY when targeting an external user. Leave `tg_id` empty for Admin (so the notification is delivered directly as plain text in the current chat).\n"
             "- `change_model`: Switch LLM tier ('cheap'/'smart') by complexity. Auto-reverts to 'default' after turn; never report model status to user.\n"
+            "- `think`: Use before multi-step tasks, complex tool chains, or when unsure. It changes nothing and returns OK. Do not use it for trivial requests.\n"
         ),
         "tools": [
+            # REASONING
+            "think",
+
             # DATE
             "get_date",
 
@@ -73,6 +77,9 @@ AGENTS = {
 }
 
 TOOL_DESCRIPTIONS = {
+    # Reasoning
+    "think": "Thinking through the task...",
+
     # System / Date & Time
     "get_date": "Checking current date and time...",
 

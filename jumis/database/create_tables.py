@@ -1,7 +1,6 @@
 from config import USER_DB, PORT, PASSWORD_DB, DB_NAME, HOST
 import psycopg2
-from logs.set_logger import set_logger
-logger = set_logger(name="db")
+from logs.set_logger import logger
 
 
 
@@ -263,13 +262,11 @@ def create_tables_in_db():
 
         # Saving changes:
         connection.commit()
-        logger.info("Adding tables is done!")
-        print("Adding tables is done!")
+        logger.info("Database tables created")
         return True
 
     except Exception as error:
-        logger.error(f"Error Create Tables in DB: {error}")
-        print("Error Create Tables in DB:", error)
+        logger.error("Error creating DB tables: %s", error)
         return False
 
     finally:
