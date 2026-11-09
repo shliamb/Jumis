@@ -24,6 +24,8 @@
 - `search_users` / `search_similar_messages` / `search_vectors` → список dict (+ поле `similarity` при векторном поиске).
 - `create_tables_in_db()` / `drop_all_tables_and_reset_schema()` → bool.
 
+- `DBUsers.is_blocked(tg_id)` → `bool`: один `SELECT is_blocked` по `tg_id` (нужен `ingest` для фильтра виджета).
+
 ## Логика (Вариации)
 
 1. `Database.connect` создаёт пул asyncpg с таймаутом 30 с и `max_inactive_connection_lifetime=300`; `_ensure_connected` лениво переподключает.
@@ -36,6 +38,8 @@
 8. `db_update_user`/`db_update_task`/`edit_fact`: динамический `SET`, `updated_at = NOW()`, идентификатор по приоритету (`id` → `tg_id` → `username`).
 9. `DBTasks.cleanup_stale_tasks(expire_hours=12)`: `running` → `pending`, старые `pending` → `expired`.
 10. `drop_all_tables_and_reset_schema`: `DROP SCHEMA public CASCADE; CREATE SCHEMA public; GRANT ...`.
+
+11. `DBUsers.is_blocked(tg_id)`: `SELECT is_blocked FROM users WHERE tg_id = $1`; `fetchval` → `bool`, ошибка → `False` (fail-open). Используется в `ingest` для скрытия заблокированных из виджета.
 
 ## Обработка ошибок
 

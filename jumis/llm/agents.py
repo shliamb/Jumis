@@ -31,7 +31,8 @@ AGENTS = {
             "- `add_task`: Auto-run on any requests for reminders, alarms, background notifications, or scheduled actions."
             " For `reminder` / `alarm`: Set `tg_id` ONLY when targeting an external user. Leave `tg_id` empty for Admin (so the notification is delivered directly as plain text in the current chat).\n"
             "- `change_model`: Switch LLM tier ('cheap'/'smart') by complexity. Auto-reverts to 'default' after turn; never report model status to user.\n"
-            "- `think`: Use before multi-step tasks, complex tool chains, or when unsure. It changes nothing and returns OK. Do not use it for trivial requests.\n"
+            "- `think`: Private scratchpad. Call it whenever it helps — before acting, mid-task, to compare options, verify an assumption, or organize a reply. There are no restrictions on when or how often you use it; you decide. It changes nothing and returns OK. The thought is never shown to the user.\n"
+            "- `ask_options`: FINAL STEP ONLY. When this turn's answer/report is already written, call it to attach 2-6 tappable next-step options to your answer. It ends the agent iteration instantly: no more tools, no more text after it. Never call it mid-task, before the work is finished, or together with other tools. Do not repeat the answer inside the tool — just pass the options (and an optional short question).\n"
         ),
         "tools": [
             # REASONING
@@ -63,6 +64,12 @@ AGENTS = {
             "send_mess_peer",
             "clear_inbox_notifs",
 
+            # HISTORY MAINTENANCE (cleaner)
+            "cleanup_scan",
+            "cleanup_run",
+            "digest_run",
+            "digest_list",
+
             # TASKS
             "add_task",
             "update_task",
@@ -70,7 +77,10 @@ AGENTS = {
             "del_task",
 
             # LLM models
-            "change_model"
+            "change_model",
+
+            # FINAL ANSWER
+            "ask_options"
         ]
     }
 
@@ -78,7 +88,7 @@ AGENTS = {
 
 TOOL_DESCRIPTIONS = {
     # Reasoning
-    "think": "Thinking through the task...",
+    "think": "Thinking it over...",
 
     # System / Date & Time
     "get_date": "Checking current date and time...",
@@ -108,6 +118,15 @@ TOOL_DESCRIPTIONS = {
     "search_tasks": "Fetching scheduled tasks...",
     "del_task": "Deleting scheduled task...",
 
+    # History maintenance
+    "cleanup_scan": "Scanning history for junk...",
+    "cleanup_run": "Cleaning history database...",
+    "digest_run": "Compressing old history into digests...",
+    "digest_list": "Reading chat digests...",
+
     # Change model
-    "change_model": "Switching the LLM model.."
+    "change_model": "Switching the LLM model..",
+
+    # Final answer
+    "ask_options": "Preparing reply options..."
 }

@@ -3,6 +3,7 @@ from config import ADMIN_ID
 import asyncio
 from vector import embedder
 from stt_sense import stt
+from cleaner.rules import is_searchable
 from logs.set_logger import logger
 
 
@@ -151,23 +152,25 @@ class IngestionWorker:
                 logger.error(f"[Ingest] Не удалось сохранить сообщение для chat_id={chat_id}")
                 return
 
-            # 3. VECTORIZATION 
-            if content and not content.startswith("[") and msg_db_id:
+            # 3. VECTORIZATION
+            #    Мусор («ок», «)», «привет», сервисные заглушки) вектора не получает:
+            #    поиск по истории не должен тонуть в подтверждениях.
+            if msg_db_id and is_searchable(content, msg_type):
                 task = asyncio.create_task(self._background_vectorize(message_id=msg_db_id, content=content))
                 self.background_tasks.add(task)
                 task.add_done_callback(self.background_tasks.discard)
 
 
-        # 4. CHECKING WHITE/BLACK LIST (пропускается для Избранного)
-        ##### ПОЗЖЕ ПРИДУМАЮ ЛОГИКУ #####
-        # user_data = await self.db_users.db_get_user(tg_id=sender_id)
-        # if not user_data:
-        #     logger.warning(f"[Ingest] Пользователь tg_id={sender_id} не найден в БД при проверке списков.")
-        #     return
-        # if user_data.get("is_blocked") or user_data.get("is_whitelisted"):
-        #     logger.info(f"[Ingest] Сообщение от tg_id={sender_id} проигнорировано (Blacklist/Whitelist).")
-        #     return
-        
+        # 4. ЧЁРНЫЙ СПИСОК: сообщение уже сохранено в историю (и векторизуется),
+        #    но в виджет входящих не попадает и агенту не инжектится.
+        #    Белый список не фильтрует — он про приоритеты, а не про игнор.
+        if direction == "inbound_peer":
+            if await self.db_users.is_blocked(sender_id):
+                logger.info(
+                    "[Ingest] Сообщение от заблокированного tg_id=%s сохранено, но скрыто из виджета",
+                    sender_id,
+                )
+                return
 
         # 5. ADD QUEUE RESPONSE (входящие + исходящие + избранное)
         task_payload = {

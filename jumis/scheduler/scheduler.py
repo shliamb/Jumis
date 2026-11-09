@@ -32,11 +32,23 @@ class SmartScheduler:
         # Событие для мгновенного сброса таймера ожидания
         self._notify_event = asyncio.Event()
 
+        # Обработчики системных задач: title -> coroutine(task)
+        self.system_handlers = {}
+
     def set_agent(self, agent):
             self.agent = agent
 
     def set_bot(self, bot):
             self.bot = bot
+
+    def register_system_task(self, title: str, handler):
+        """
+        Привязывает обработчик к системной задаче по её названию.
+        Название стабильно: агенту запрещено его менять.
+        """
+        self.system_handlers[title] = handler
+        logger.info("[Scheduler] Зарегистрирован системный обработчик: '%s'", title)
+
 
     def notify_new_task(self):
         """Сбрасывает таймер ожидания главного цикла при создании новой задачи."""
@@ -159,11 +171,22 @@ class SmartScheduler:
 
 
     async def execute_system_cron(self, task: Dict[str, Any]):
-        """Заглушка/обработчик системных крон-задач."""
+        """Запускает обработчик системной задачи (регистрируется модулями)."""
+        title = task.get("title") or ""
+        handler = self.system_handlers.get(title)
+
         logger.info(
-            f"[CronWorker] Выполнение системной задачи #{task.get('id')}: {task.get('title')}"
+            f"[CronWorker] Выполнение системной задачи #{task.get('id')}: {title}"
         )
-        # Здесь логика системных скриптов
+
+        if handler is None:
+            logger.error(
+                "[CronWorker] Нет обработчика для системной задачи '%s' (#%s).",
+                title, task.get("id"),
+            )
+            return
+
+        await handler(task)
 
 
 
@@ -285,7 +308,17 @@ class SmartScheduler:
 
             except Exception as e:
                 logger.error(f"[AgentWorker] Ошибка выполнения задачи #{t_id}: {e}", exc_info=True)
-                await self.db_tasks.db_update_task({"id": t_id, "status": "failed"})
+                # Крон не должен умирать от одной ошибки: переносим на следующее
+                # срабатывание, иначе одна сетевая осечка убивает напоминание навсегда.
+                if has_cron:
+                    next_scheduled_at = croniter(task["cron_expression"], get_now_datetime()).get_next(datetime)
+                    await self.db_tasks.db_update_task({
+                        "id": t_id,
+                        "status": "pending",
+                        "scheduled_at": next_scheduled_at,
+                    })
+                else:
+                    await self.db_tasks.db_update_task({"id": t_id, "status": "failed"})
                 self.notify_new_task()
             finally:
                 self.agent_queue.task_done()
@@ -330,7 +363,17 @@ class SmartScheduler:
                     f"[CronWorker] Ошибка выполнения cron-задачи #{t_id}: {e}",
                     exc_info=True,
                 )
-                await self.db_tasks.db_update_task({"id": t_id, "status": "failed"})
+                # Системный крон обязан жить дальше: переносим на следующее срабатывание.
+                if has_cron:
+                    next_scheduled_at = croniter(task["cron_expression"], get_now_datetime()).get_next(datetime)
+                    await self.db_tasks.db_update_task({
+                        "id": t_id,
+                        "status": "pending",
+                        "scheduled_at": next_scheduled_at,
+                    })
+                    self.notify_new_task()
+                else:
+                    await self.db_tasks.db_update_task({"id": t_id, "status": "failed"})
             finally:
                 self.cron_queue.task_done()
 

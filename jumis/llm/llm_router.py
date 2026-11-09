@@ -99,6 +99,9 @@ class LLMWorker:
         self.mytelethon = mytelethon
         self.queue_new_mess = queue_new_mess
 
+        # Модуль чистки истории (устанавливается в run_bot после создания)
+        self.cleaner = None
+
         self.admin_id = ADMIN_ID
 
 
@@ -400,6 +403,7 @@ class LLMWorker:
                 if 'db_tasks' in sig.parameters: call_kwargs['db_tasks'] = self.db_tasks
                 if 'scheduler' in sig.parameters: call_kwargs['scheduler'] = self.scheduler
                 if 'llm' in sig.parameters: call_kwargs['llm'] = self
+                if 'cleaner' in sig.parameters: call_kwargs['cleaner'] = self.cleaner
 
 
                 # Вызов в зависимости от типа функции (async/sync)

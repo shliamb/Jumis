@@ -4,7 +4,7 @@
 
 Точка входа приложения и базовый слой конфигурации:
 
-- `run_bot.py` — сборка и запуск всех сервисов в одном asyncio-процессе, создание `Bot` напрямую.
+- `run_bot.py` — сборка и запуск всех сервисов в одном asyncio-процессе, создание `Bot` напрямую, подключение модуля `cleaner` (схема дайджестов + системный крон уборки).
 - `config.py` — статические настройки и чтение секретов из `.env`.
 - `create_session.py` — одноразовый скрипт авторизации Telethon (`session_jumis.session`).
 
@@ -18,7 +18,8 @@
 ## Выходные данные
 
 - Работающий процесс с корутинами: `dp.start_polling`, `mytelethon.run`, `ingestion_worker.run`, `jumis_agent.run_queue_worker`, `scheduler.run`.
-- Заполненный `Dispatcher` (`dp`) сервисами: `db_users`, `llm`, `json_back`, `jumis_agent`.
+- Заполненный `Dispatcher` (`dp`) сервисами: `db_users`, `llm`, `json_back`, `jumis_agent`, `cleaner`.
+- Таблица `chat_digests` (создаётся `cleaner.ensure_schema()`) и строка системного крона в `scheduled_tasks`.
 - Файл `session_jumis.session` (Telethon) и пул asyncpg-соединений.
 - Единый лог `jumis/logs/files/jumis.log` (+ консоль) через `logs.set_logger.logger`.
 
@@ -27,11 +28,11 @@
 1. При импорте `run_bot.py` вызывается `setup_logger()` из `logs.set_logger` до импорта тяжёлых модулей (эмбеддер, STT, LLM), чтобы их стартовые сообщения попали в общий файл.
 2. `main_bot()`: `db.connect()` → создание `DBMessages`, `DBTasks`, `SmartScheduler`, `DBMemories`, `DBUsers`; `init()` прогревает кэш категорий.
 3. Создаются очереди `queue_messages` (Telethon → ingest) и `queue_new_mess` (ingest/agent → виджет).
-4. Создаётся `myTelethon`, затем `LLMWorker` (со ссылками на все сервисы) и кладётся в `dp["llm"]`.
+4. Создаётся `myTelethon`, затем `LLMWorker` (со ссылками на все сервисы) и кладётся в `dp["llm"]`; сразу после — `Cleaner(db, db_users, db_tasks, llm, scheduler)`: `llm.cleaner = cleaner`, `dp["cleaner"]`, `await cleaner.ensure_schema()` (таблица `chat_digests`, рабочие таблицы не меняются).
 5. Проверяются динамические enum категорий (`get_tools_for_agent`), вывод — на уровне DEBUG.
-6. `Bot(TELEGRAM_BOT_TOKEN, default=DefaultBotProperties(parse_mode=HTML))` → `dp.bot`; подключение роутеров `ALL_ROUTERS`; создание `IngestionWorker`, `JsonBackup`, `JumisAgent`; `llm.set_jumis_agent`, `scheduler.set_agent/set_bot`.
+6. `Bot(TELEGRAM_BOT_TOKEN, default=DefaultBotProperties(parse_mode=HTML))` → `dp.bot`; подключение роутеров `ALL_ROUTERS`; создание `IngestionWorker`, `JsonBackup`, `JumisAgent`; `llm.set_jumis_agent`, `scheduler.set_agent/set_bot`, `cleaner.register()` (обработчик системного крона в планировщике).
 7. Однократно отправляется приветствие админу через агента (`send_startup_greeting`).
-8. `scheduler.run()` вызывается один раз (он создаёт воркеры и возвращается), затем защитный цикл: сервисы запускаются отдельными `asyncio.Task` (polling, Telethon, ingest, agent). При сбое одного задачи отменяются, через 5 с набор перезапускается; при `CancelledError` — остановка.
+8. `scheduler.run()` вызывается один раз (он создаёт воркеры и возвращается), затем `cleaner.ensure_system_task()` — крон уборки создаётся или оживляется, — и защитный цикл: сервисы запускаются отдельными `asyncio.Task` (polling, Telethon, ingest, agent). При сбое одного задачи отменяются, через 5 с набор перезапускается; при `CancelledError` — остановка.
 9. `dp.start_polling` вызывается с `handle_signals=False` (Ctrl+C обрабатывает `asyncio.run`) и `close_bot_session=False` (сессия живёт между перезапусками, закрывается в `finally`).
 10. `finally`: остановка Telethon (`mytelethon.stop()`), закрытие сессии бота, пула БД, планировщика; в лог пишутся старт/стоп и причина сбоя.
 
@@ -43,3 +44,4 @@
 - `CancelledError` (Ctrl+C / остановка) гасит сервисы и пробрасывается; `finally` закрывает ресурсы.
 - `db_memory.init()`/`db_users.init()` обёрнуты в `try/except` — при пустой БД пишется warning, приложение продолжает старт.
 - Повторный вызов `main_bot` не предусмотрен: роутеры и планировщик создаются один раз.
+- `cleaner.ensure_schema()`/`ensure_system_task()` при сбое пишут error в лог и не останавливают старт (уборка просто не сработает).

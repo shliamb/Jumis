@@ -125,6 +125,17 @@ class DBUsers():
             return False
 
 
+    async def is_blocked(self, tg_id: int) -> bool:
+        """Быстрая проверка чёрного списка: читает только флаг `is_blocked`."""
+        query = "SELECT is_blocked FROM users WHERE tg_id = $1;"
+        try:
+            value = await self.db.fetchval(query, tg_id)
+            return bool(value)
+        except Exception as e:
+            logger.error("Error checking is_blocked for tg_id=%s: %s", tg_id, e)
+            return False
+
+
     async def db_update_user(self, user_data: dict) -> bool:
         """
         Универсальное обновление данных пользователя.

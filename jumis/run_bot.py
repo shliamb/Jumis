@@ -29,6 +29,7 @@ from handlers.dispatcher import dp
 
 from telethoner.worker_telethon import myTelethon
 from ingest.worker import IngestionWorker
+from cleaner import Cleaner
 
 
 
@@ -47,17 +48,22 @@ async def init_router() -> None:
     dp.include_router(main_router)
 
 
+async def get_admin_lang(db_users) -> str:
+    """Внутренний язык владельца из БД (ru/en); по умолчанию 'en'."""
+    try:
+        user_data = await db_users.search_users(tg_id=ADMIN_ID)
+        if user_data:
+            return user_data[0].get("lang_code") or "en"
+    except Exception as e:
+        logger.warning("Failed to get lang_code for ADMIN_ID=%s: %s", ADMIN_ID, e)
+    return "en"
+
+
 async def send_startup_greeting(db_users, jumis_agent):
     """Отправка стартового приветствия администратору."""
     await asyncio.sleep(2)  # Пауза для инициализации воркеров
 
-    lang_user = "en"
-    try:
-        user_data = await db_users.search_users(tg_id=ADMIN_ID)
-        if user_data:
-            lang_user = user_data[0].get("lang_code")
-    except Exception as e:
-        logger.warning("Failed to get lang_code for ADMIN_ID=%s: %s", ADMIN_ID, e)
+    lang_user = await get_admin_lang(db_users)
 
     prompt_to_agent = (
         f"[SYSTEM TRIGGER: STARTUP]\n"
@@ -134,6 +140,18 @@ async def main_bot() -> None:
     )
     dp["llm"] = llm  # Доступен во всех хэндлерах через `llm` или контекст
 
+    # Модуль чистки истории: уборка мусора, ночная самаризация, системный крон
+    cleaner = Cleaner(
+        db=db,
+        db_users=db_users,
+        db_tasks=db_tasks,
+        llm=llm,
+        scheduler=scheduler,
+    )
+    llm.cleaner = cleaner
+    dp["cleaner"] = cleaner
+    await cleaner.ensure_schema()
+
 
     # Проверим динамическое получение категорий фактов:
     facts_category = await llm.get_tools_for_agent(["write_fact"])
@@ -171,10 +189,14 @@ async def main_bot() -> None:
     )
     dp["json_back"] = json_back
 
+    # Внутренний язык владельца (ru/en) — подписи кнопок и стартовое приветствие
+    lang_admin = await get_admin_lang(db_users)
+
     jumis_agent = JumisAgent(
         bot=dp.bot,
         llm=llm,
-        queue_new_mess=queue_new_mess
+        queue_new_mess=queue_new_mess,
+        admin_lang=lang_admin,
     )
     dp["jumis_agent"] = jumis_agent
 
@@ -182,6 +204,7 @@ async def main_bot() -> None:
     await llm.refresh_llm_models()
     scheduler.set_agent(jumis_agent)
     scheduler.set_bot(dp.bot)
+    cleaner.register()  # обработчик ночной уборки в планировщике
 
     logger.info("Starting services: aiogram polling, telethon, ingest, agent")
 
@@ -192,6 +215,9 @@ async def main_bot() -> None:
         # Планировщик сам создаёт свои фоновые воркеры и сразу возвращает управление.
         # Запускаем его один раз, чтобы при перезапуске сервисов не плодить дубли.
         await scheduler.run()
+
+        # Крон уборки обязан существовать: если его нет — создаём, если протух — оживляем.
+        await cleaner.ensure_system_task()
 
         while True:
             # Запускаем приветствие как неблокирующую фоновую задачу
@@ -254,7 +280,7 @@ async def main_bot() -> None:
         # 3. Закрываем пул подключений к PostgreSQL (asyncpg)
         await db.close()
 
-        # 4. Останавливаем планировщик тасок
+        # 4. Останавливаем планировщик напоминаний
         await scheduler.stop()
 
         logger.info("=== Jumis stopped ===")

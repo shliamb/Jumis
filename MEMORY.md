@@ -9,18 +9,20 @@
 ## Модули
 
 - [jumis — точка входа и конфигурация](jumis/SPEC.md) — `run_bot.py`, `config.py`, `create_session.py`.
-- [handlers](jumis/handlers/SPEC.md) — aiogram-роутеры: `/start`, `/admin`, fallback в агента.
-- [jumis_agent](jumis/jumis_agent/SPEC.md) — ядро агента: стриминг, tool-loop, рендер ответов, виджет входящих.
-- [llm](jumis/llm/SPEC.md) — LiteLLM: каталог моделей, промпт, 18 инструментов (включая `think`), диалог, токены.
-- [database](jumis/database/SPEC.md) — пул asyncpg, схема, репозитории users/messages/memories/tasks.
+- [handlers](jumis/handlers/SPEC.md) — aiogram-роутеры: `/start`, `/admin`, кнопки-варианты `ask_options` (callback), кнопка «Очистить» на виджете входящих (`inbox:clear`), fallback в агента.
+- [jumis_agent](jumis/jumis_agent/SPEC.md) — ядро агента: стриминг, tool-loop, финальный ответ с кнопками `ask_options`, рендер ответов, виджет входящих с кнопкой «Очистить», `admin_lang` для подписей.
+- [llm](jumis/llm/SPEC.md) — LiteLLM: каталог моделей, промпт, 23 инструмента (включая `think`, `ask_options` и обслуживание истории), диалог, токены.
+- [database](jumis/database/SPEC.md) — пул asyncpg, схема, репозитории users/messages/memories/tasks, быстрая проверка `is_blocked`.
 - [telethoner](jumis/telethoner/SPEC.md) — userbot: приём/отправка личных сообщений, реакции, авто-реконнект.
-- [ingest](jumis/ingest/SPEC.md) — конвейер: очередь → БД, STT голосовых, векторизация, очередь виджета.
+- [ingest](jumis/ingest/SPEC.md) — конвейер: очередь → БД, STT голосовых, векторизация, очередь виджета; чёрный список (`is_blocked`) сохраняет в историю, но не пускает в виджет.
 - [scheduler](jumis/scheduler/SPEC.md) — напоминания, будильники, cron-задачи.
 - [vector](jumis/vector/SPEC.md) — эмбеддинги `multilingual-e5-base` (768).
 - [stt_sense](jumis/stt_sense/SPEC.md) — локальный ASR Kairos на GPU.
 - [jsonbackup](jumis/jsonbackup/SPEC.md) — экспорт/импорт таблиц в JSON.
 - [utils](jumis/utils/SPEC.md) — время, очистка текста, сериализация.
 - [logs](jumis/logs/SPEC.md) — единый `logger`, один файл `jumis.log` + консоль, `setup()` в run_bot.
+
+- [cleaner](jumis/cleaner/SPEC.md) — обслуживание истории: уборка мусора и дублей (`janitor`), ночная самаризация старых батчей в `chat_digests` (`digest`), железобетонный системный крон (`task`).
 
 ## Логические цепочки (Scenarios)
 
@@ -34,7 +36,11 @@ Telethon ловит личное сообщение, сохраняет его �
 
 ### Владелец ответил собеседнику
 Ответ снимает собеседника с очереди неотвеченных, виджет обновляется или удаляется.
-**Шаги:** исходящее через Telethon или `send_mess_peer` (LLM-инструмент) -> `outbound_owner` в `queue_messages` (Ingest) -> `queue_new_mess` -> `message_processing` удаляет пир из `pending_peers` (JumisAgent). Явная очистка — инструмент `clear_inbox_notifs`.
+**Шаги:** исходящее через Telethon или `send_mess_peer` (LLM-инструмент) -> `outbound_owner` в `queue_messages` (Ingest) -> `queue_new_mess` -> `message_processing` удаляет пир из `pending_peers` (JumisAgent). Явная очистка — инструмент `clear_inbox_notifs` или кнопка «Очистить» (сценарий ниже).
+
+### Очистка виджета входящих кнопкой
+Владелец жмёт «🧹 Очистить» под виджетом: очередь снимается, виджет исчезает, агент не запускается.
+**Шаги:** `inbox:clear` (Handlers -> [SPEC](jumis/handlers/SPEC.md)) -> проверка `ADMIN_ID` -> тост по `jumis_agent.admin_lang` -> `clear_pending_queue()` (JumisAgent -> [SPEC](jumis/jumis_agent/SPEC.md)): `pending_peers` очищен, виджет удалён -> удаление сообщения с кнопкой (страховка для устаревшего виджета). 0 токенов; `check_notif_mess` в следующем запуске агента инжектить нечего. Сообщения в БД остаются доступными через `msg_search`.
 
 ### Срабатывание напоминания
 Планировщик находит задачу, меняет статус и запускает агента с системным триггером.
@@ -47,16 +53,29 @@ Telethon ловит личное сообщение, сохраняет его �
 ### Первый запуск и регистрация владельца
 **Шаги:** `main_bot` поднимает пул БД, сервисы, бота и Telethon ([SPEC](jumis/SPEC.md)) -> приветствие админу от агента -> `/start` создаёт запись `users.is_admin=True` (Handlers). Модели по умолчанию берутся из профиля, иначе `DEFAULT_FALLBACK_MODEL` (LLM).
 
+### Быстрый выбор варианта ответа
+Агент завершает итерацию финальным ответом с inline-кнопками `ask_options`; выбор владельца становится его следующим сообщением.
+**Шаги:** `ask_options` (LLM -> [SPEC](jumis/llm/SPEC.md)) -> `call_function` возвращает `{"status": "options_shown"}` -> `show_options` (JumisAgent -> [SPEC](jumis/jumis_agent/SPEC.md)) рисует текст + кнопки и прерывает tool-loop -> нажатие `opt:<token>` (Handlers -> [SPEC](jumis/handlers/SPEC.md)) -> `consume_option` -> `process_agent_request` с выбранным текстом.
+
+### Ночная уборка и сжатие истории
+Каждую ночь система чистит мусор и сжимает самый старый кусок переписки в дайджест, а сырые сообщения удаляет.
+**Шаги:** `scheduled_tasks` (`system_cron`, 03:30, [SPEC](jumis/scheduler/SPEC.md)) -> `_execute_task` → `cron_queue` -> `execute_system_cron` по `title` -> `Cleaner.nightly` ([SPEC](jumis/cleaner/SPEC.md)) -> `Janitor.run`: мусор и дубли + `VACUUM` -> `Digester.run_night`: батч старше 7 дней → `chat_digests` + `DELETE messages` + `users.summary` в одной транзакции. Удаление батча и есть курсор: следующий прогон берёт следующие сообщения.
+
+### Ручная чистка истории
+Владелец смотрит предпросмотр и запускает уборку кнопкой, либо просит агента.
+**Шаги:** `/cleanup` (Handlers -> [SPEC](jumis/handlers/SPEC.md)) -> `cleaner.scan()` без удаления -> inline «✅ Удалить» (`clean:run`) -> `cleaner.run_hygiene()`. Альтернативы: `/cleanup_run` (сразу), `/digest_now N`, `/digests [chat_id]`; агенту — инструменты `cleanup_scan`, `cleanup_run`, `digest_run`, `digest_list` (LLM -> [SPEC](jumis/llm/SPEC.md)).
+
 ## Roadmap
 
 - [ ] Режим «Дятла»: повторные напоминания через дочерние cron-задачи (описан в `scheduler.py`, не реализован).
 - [ ] Сохранение `llm_logs` в БД (сейчас `DBTokenLogger` только печатает токены в консоль).
-- [ ] Whitelist/blacklist в `ingest` (код закомментирован).
+- [ ] Whitelist в `ingest` (сейчас не влияет: `is_whitelisted` — задел на приоритеты).
 - [ ] Обработка фото, документов и видеосообщений (сейчас отклоняются).
 - [ ] Парсеры РС-рассылок и Telegram-каналов.
 - [ ] Выход в интернет через компьютерное зрение (скриншот → смысл).
 - [ ] Многопоточные вызовы инструментов.
-- [ ] Инструменты очистки истории сообщений.
+- [ ] Поиск по дайджестам: сейчас `chat_digests` читаются только по `chat_id`, семантического поиска по сжатой истории нет.
+- [ ] Удаление старых `completed`/`cancelled` задач планировщика (старше 30 дней) — пока чистятся только сообщения.
 - [ ] Мультиязычность сверх ru/en при необходимости.
 - [ ] Починить импорт задач из JSON: `JsonBackup` ищет `db_tasks.add_task`, а метод называется `db_add_task` (сейчас `/up_tasks` не работает).
 
@@ -76,6 +95,15 @@ Telethon ловит личное сообщение, сохраняет его �
 - Логирование: только `from logs.set_logger import logger`; `setup()` вызывается один раз в `run_bot.py` до импорта тяжёлых модулей. Один файл `jumis/logs/files/jumis.log` + консоль, формат с `module:lineno`. В INFO не пишем текст сообщений — только `chat_id`/`msg_id`/длины/имена инструментов.
 
 - LLM-температура задаётся только в `config.py` (`LLM_TEMPERATURE = 0.1`) и применяется централизованно ко всем чат-вызовам через `LLMWorker._call_request`; `None` отключает передачу параметра.
+
+- `users.is_blocked` — режим A: сообщение сохраняется в историю и векторизуется, но не попадает в `queue_new_mess` (нет виджета и инжекта агенту); проверка `db_users.is_blocked` в `ingest`, ошибка БД — fail-open. `is_whitelisted` не фильтрует.
+
+- `think` — свободный scratchpad: агент сам решает, когда и сколько раз думать; в промпте нет запретов, в коде нет счётчиков вызовов. Статус в чате — `Thinking it over...`; пустая мысль отклоняется.
+
+- `cleaner` не меняет схему рабочих таблиц: только новая `chat_digests` (создаётся `ensure_schema()`), `UPDATE users.summary` и `DELETE` из `messages`. `/crTabDb` и `create_tables.py` не трогаются.
+- Системный крон уборки защищён на трёх уровнях: `del_task` отказывает для `task_type='system_cron'`, `update_task` разрешает только `status`, `ensure_system_task()` при старте создаёт строку заново или оживляет `expired`/`failed` (но не снимает осознанный `cancelled`).
+- Курсор самаризации — само удаление: дайджест покрывает ровно тот батч, который удалён в той же транзакции. Отдельного watermark в схеме нет.
+- Мусор (`is_junk`) никогда не включает сообщения с цифрами, ссылками, `@` или почтой — «700₽» и «завтра в 15» остаются всегда.
 
 ## Стиль пользователя (User Style)
 

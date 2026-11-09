@@ -4,6 +4,7 @@ import time
 import json
 import re
 import html
+import secrets
 import traceback
 import markdown
 from llm.agents import TOOL_DESCRIPTIONS
@@ -13,7 +14,7 @@ from stt_sense import stt
 from aiogram.exceptions import TelegramRetryAfter, TelegramAPIError, TelegramBadRequest, ClientDecodeError
 from pydantic import ValidationError
 from aiogram.methods import SendRichMessage
-from aiogram.types import InputRichMessage
+from aiogram.types import InputRichMessage, InlineKeyboardButton, InlineKeyboardMarkup
 from config import ADMIN_ID, USE_RICH_MESSAGES
 from logs.set_logger import logger
 
@@ -114,7 +115,13 @@ class TelegramHTMLCleaner(HTMLParser):
 
 class JumisAgent:
 
-    def __init__(self, bot, llm, queue_new_mess: asyncio.Queue):
+    # Время жизни одноразовых токенов кнопок ask_options (сек)
+    OPTIONS_TTL_SECONDS = 3600
+
+    # Подпись кнопки очистки под виджетом входящих (внутренний язык владельца)
+    INBOX_LABELS = {"ru": "🧹 Очистить", "en": "🧹 Clear"}
+
+    def __init__(self, bot, llm, queue_new_mess: asyncio.Queue, admin_lang: str | None = "en"):
         self.llm = llm
         self.bot = bot
         self.stt = stt
@@ -122,12 +129,38 @@ class JumisAgent:
         self.admin_id = ADMIN_ID
         self.use_rich_message = USE_RICH_MESSAGES
         self.tool_descriptions = TOOL_DESCRIPTIONS
+        # Внутренний язык владельца: 'ru' или 'en'. Влияет только на подписи кнопок.
+        self.admin_lang = self._norm_lang(admin_lang)
 
         # Словарь вида: {sender_id: {"username": str, "count": int, "last_text": str}}
         self.pending_peers = {}
         # ID сообщения-уведомления, которое мы будем редактировать в чате с Владельцем
         self.notif_msg_id = None
+        # Одноразовые токены кнопок ask_options: token -> {chat_id, question, option, created_at}
+        self.option_tokens = {}
+        # ID последнего сообщения с вариантами ответа: chat_id -> message_id
+        self.options_msg_id = {}
+        # Флаг «агент сейчас работает» — защита от параллельного запуска по кнопке
+        self.agent_busy = False
 
+
+    @staticmethod
+    def _norm_lang(code: str | None) -> str:
+        """Приводит язык владельца к поддерживаемой паре: 'ru' либо 'en'."""
+        return "ru" if (code or "").lower().startswith("ru") else "en"
+
+
+    def _inbox_keyboard(self) -> InlineKeyboardMarkup:
+        """
+        Кнопка «Очистить» под виджетом входящих.
+        Нажатие обрабатывает handlers/inbox.py — очередь чистится без запуска агента.
+        """
+        return InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(
+                text=self.INBOX_LABELS[self.admin_lang],
+                callback_data="inbox:clear",
+            )
+        ]])
 
     @staticmethod
     def markdown_to_telegram_html(text: str) -> str:
@@ -488,10 +521,141 @@ class JumisAgent:
 
 
 
+    def _purge_option_tokens(self):
+        """Удаляет просроченные токены кнопок ask_options."""
+        now = time.time()
+        for token, data in list(self.option_tokens.items()):
+            if now - data["created_at"] > self.OPTIONS_TTL_SECONDS:
+                self.option_tokens.pop(token, None)
+
+
+    def _drop_chat_options(self, chat_id: int):
+        """Удаляет все токены кнопок чата: активной может быть только последняя пачка вариантов."""
+        for token, data in list(self.option_tokens.items()):
+            if data["chat_id"] == chat_id:
+                self.option_tokens.pop(token, None)
+
+
+    def consume_option(self, token: str):
+        """Забирает одноразовый токен кнопки. Возвращает данные варианта или None."""
+        data = self.option_tokens.pop(token, None)
+        if not data:
+            return None
+        self._drop_chat_options(data["chat_id"])
+        if time.time() - data["created_at"] > self.OPTIONS_TTL_SECONDS:
+            return None
+        return data
+
+
+    def _options_keyboard(self, chat_id: int, question: str, options: list) -> InlineKeyboardMarkup:
+        """Регистрирует одноразовые токены и собирает inline-клавиатуру вариантов."""
+        self._purge_option_tokens()
+        self._drop_chat_options(chat_id)
+
+        # Короткие варианты — по два в ряд, длинные — по одному
+        per_row = 2 if max(len(o) for o in options) <= 20 else 1
+        rows, row = [], []
+        for option in options:
+            token = secrets.token_hex(4)
+            self.option_tokens[token] = {
+                "chat_id": chat_id,
+                "question": question,
+                "option": option,
+                "created_at": time.time(),
+            }
+            row.append(InlineKeyboardButton(text=option, callback_data=f"opt:{token}"))
+            if len(row) >= per_row:
+                rows.append(row)
+                row = []
+        if row:
+            rows.append(row)
+        return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+    async def show_options(self, chat_id: int, message_id: int, answer_text: str, question: str, options: list):
+        """Финальный ответ агента: текст ответа + кнопки-варианты.
+
+        Вызывается из process_agent_request вместо финальной отправки, после чего
+        tool-loop завершается — агент не выполняет новых итераций до выбора пользователя.
+        """
+        answer_text = (answer_text or "").strip()
+        question = (question or "").strip()
+
+        # Кнопки живут только в личном чате владельца
+        if chat_id != self.admin_id:
+            logger.warning("ask_options: chat_id=%s is not the owner, buttons skipped", chat_id)
+            await self.send_jumis_response(chat_id=chat_id, message_id=message_id, llm_response=answer_text or question)
+            return
+
+        if not answer_text and not question:
+            question = "Выбери вариант:"
+
+        # Снимаем клавиатуру с предыдущего сообщения с вариантами
+        prev_id = self.options_msg_id.pop(chat_id, None)
+        if prev_id:
+            try:
+                await self.bot.edit_message_reply_markup(chat_id=chat_id, message_id=prev_id, reply_markup=None)
+            except Exception:
+                pass
+
+        keyboard = self._options_keyboard(chat_id, question, options)
+
+        body_html = self.markdown_to_telegram_html(answer_text) if answer_text else ""
+        if question:
+            body_html = f"{body_html}\n\n<i>{html.escape(question)}</i>"
+        body_html = body_html.strip()
+
+        # Длинный ответ не влезает в одно сообщение вместе с кнопками — шлём его отдельно
+        if len(body_html) > 4000:
+            await self.send_jumis_response(chat_id=chat_id, message_id=message_id, llm_response=answer_text)
+            sent = await self.bot.send_message(
+                chat_id,
+                html.escape(question) if question else "…",
+                parse_mode="HTML",
+                reply_markup=keyboard,
+            )
+            self.options_msg_id[chat_id] = sent.message_id
+            return
+
+        try:
+            await self.bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=message_id,
+                text=body_html,
+                parse_mode="HTML",
+                disable_web_page_preview=True,
+                reply_markup=keyboard,
+            )
+            self.options_msg_id[chat_id] = message_id
+            return
+        except Exception as e:
+            logger.warning("ask_options: edit failed (%s), sending a new message", e)
+            try:
+                await self.bot.delete_message(chat_id=chat_id, message_id=message_id)
+            except Exception:
+                pass
+
+        try:
+            sent = await self.bot.send_message(
+                chat_id,
+                body_html,
+                parse_mode="HTML",
+                disable_web_page_preview=True,
+                reply_markup=keyboard,
+            )
+        except Exception as e:
+            logger.warning("ask_options: HTML send failed (%s), plain text fallback", e)
+            plain = re.sub(r'<[^>]+>', '', body_html).strip() or "…"
+            sent = await self.bot.send_message(chat_id, plain[:4000], reply_markup=keyboard)
+        self.options_msg_id[chat_id] = sent.message_id
+
+
+
     async def process_agent_request(self, chat_id: int, prompt_text: str):
             """ УНИВЕРСАЛЬНОЕ ядро запуска Агента Jumis (из хэндлера или очереди) """
             msg = None
             try:
+                self.agent_busy = True
                 system, tools = await self.llm.get_tools("jumis_agent")
                 
                 # Отправляем начальную плашку в чат
@@ -597,13 +761,29 @@ class JumisAgent:
                         except Exception:
                             pass
 
+                        options_payload = None
                         for tc in tool_calls_info:
                             args = json.loads(tc['arguments']) if isinstance(tc['arguments'], str) else tc['arguments']
                             result = await self.llm.call_function(tc['name'], args)
+                            # ask_options отдаёт маркер: показать кнопки и закрыть итерацию
+                            if isinstance(result, dict) and result.get("status") == "options_shown":
+                                options_payload = result
                             result_str = json.dumps(result, ensure_ascii=False) if result is not None else "ok"
                             await self.llm.add_tool_response(tc['id'], result_str)
 
                         self.llm._safe_trim()
+
+                        # ask_options — это финальный ответ: текст + кнопки, дальше модель не крутим
+                        if options_payload:
+                            await self.show_options(
+                                chat_id=chat_id,
+                                message_id=msg.message_id,
+                                answer_text=stream_text or full_text,
+                                question=options_payload.get("question", ""),
+                                options=options_payload.get("options", []),
+                            )
+                            break
+
                         continue
 
                     # 3. ФИНАЛЬНЫЙ ОТВЕТ
@@ -667,6 +847,8 @@ class JumisAgent:
                     await self.bot.send_message(chat_id, error_msg, parse_mode="Markdown")
 
             finally:
+                self.agent_busy = False
+
                 # Гарантированный сброс на default при любом выходе из цикла
                 if self.llm.current_model != self.llm.model_default:
                     self.llm.change_model("default")
@@ -816,7 +998,8 @@ class JumisAgent:
                     message_id=self.notif_msg_id,
                     text=text_message,
                     parse_mode="HTML",
-                    disable_web_page_preview=True
+                    disable_web_page_preview=True,
+                    reply_markup=self._inbox_keyboard()  # клавиатура не теряется при перерисовке
                 )
                 return  # Успешно отредактировали старое сообщение, выходим
             except TelegramBadRequest as e:
@@ -837,7 +1020,8 @@ class JumisAgent:
                 text=text_message,
                 parse_mode="HTML",
                 disable_web_page_preview=True,
-                disable_notification=False if is_new_peer else True  # Звук только при создании/появлении нового пира
+                disable_notification=False if is_new_peer else True,  # Звук только при создании/появлении нового пира
+                reply_markup=self._inbox_keyboard()
             )
             self.notif_msg_id = sent_msg.message_id
         except Exception as e:

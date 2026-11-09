@@ -7,6 +7,7 @@ from datetime import datetime, timezone, timedelta
 from croniter import croniter
 from config import ADMIN_ID
 from logs.set_logger import logger
+from cleaner.task import is_system_task
 import json
 
 
@@ -30,6 +31,56 @@ async def think(thought: str, **kwargs) -> str:
     # Мысль не сохраняем (scratchpad) и не логируем целиком — только длину.
     logger.info("think: %d chars", len(clean))
     return "OK"
+
+
+
+###### FINAL ANSWER / OPTIONS ##########
+
+OPTIONS_MIN = 2
+OPTIONS_MAX = 6
+OPTION_MAX_LEN = 60
+QUESTION_MAX_LEN = 300
+
+
+async def ask_options(question: str = "", options: list = None, **kwargs) -> dict:
+    """Финальный шаг ответа: нормализует варианты для кнопок.
+
+    Сам ничего не отправляет и не пишет в БД — рендером кнопок и остановкой
+    tool-loop занимается JumisAgent. Успешный результат содержит
+    status="options_shown", по которому агент понимает, что итерацию надо закрыть.
+    """
+    if not isinstance(options, list):
+        return {"status": "error", "message": "The 'options' argument must be an array of strings."}
+
+    clean_options = []
+    for raw in options:
+        text_opt = str(raw or "").strip()
+        if not text_opt or text_opt in clean_options:
+            continue
+        if len(text_opt) > OPTION_MAX_LEN:
+            return {
+                "status": "error",
+                "message": (
+                    f"Option '{text_opt[:30]}...' is too long ({len(text_opt)} chars). "
+                    f"Shorten every option to {OPTION_MAX_LEN} characters or fewer and call again."
+                ),
+            }
+        clean_options.append(text_opt)
+
+    if len(clean_options) < OPTIONS_MIN:
+        return {
+            "status": "error",
+            "message": f"Provide at least {OPTIONS_MIN} distinct non-empty options.",
+        }
+
+    clean_options = clean_options[:OPTIONS_MAX]
+
+    clean_question = str(question or "").strip()
+    if len(clean_question) > QUESTION_MAX_LEN:
+        clean_question = clean_question[:QUESTION_MAX_LEN].rstrip()
+
+    logger.info("ask_options: %d options, question_len=%d", len(clean_options), len(clean_question))
+    return {"status": "options_shown", "question": clean_question, "options": clean_options}
 
 
 
@@ -983,6 +1034,21 @@ async def update_task(scheduler, db_tasks, **kwargs) -> str:
         logger.warning(f"[update_task] No fields to update provided for task #{task_id}.")
         return f"{header}\n[NO CHANGES] No valid update parameters provided for task #{task_id}."
 
+    # У системной задачи можно менять только статус (пауза/возобновление),
+    # но не название, тип, cron и инструкцию — иначе крон потеряет обработчик.
+    protected_fields = {"title", "cron_expression", "task_type", "agent_instruction"}
+    if protected_fields & set(task_data.keys()):
+        try:
+            found = await db_tasks.db_search_tasks(task_id=task_id, limit=1)
+            if found and is_system_task(found[0]):
+                logger.warning("[update_task] Отказ: задача #%s системная, защищённые поля.", task_id)
+                return (
+                    f"{header}\n[FORBIDDEN] Task #{task_id} is a system task: its title, type, "
+                    "cron expression and instruction cannot be changed. Only 'status' may be updated."
+                )
+        except Exception as e:
+            logger.warning("[update_task] Не удалось проверить тип задачи #%s: %s", task_id, e)
+
     # 1. Приведение scheduled_at к настенному datetime
     if "scheduled_at" in task_data:
         raw_scheduled = task_data["scheduled_at"]
@@ -1103,6 +1169,19 @@ async def del_task(id: int, db_tasks, scheduler) -> str:
         logger.error("[del_task] Database handler (db_tasks) is missing or uninitialized.")
         return f"{header}\n[CRITICAL ERROR] Database connection is unavailable."
 
+    # Системные задачи (ночная уборка и пр.) удалять запрещено — только пауза.
+    if db_tasks is not None:
+        try:
+            found = await db_tasks.db_search_tasks(task_id=id, limit=1)
+            if found and is_system_task(found[0]):
+                logger.warning("[del_task] Отказ: задача #%s — системная.", id)
+                return (
+                    f"{header}\n[FORBIDDEN] Task #{id} is a system task and cannot be deleted.\n"
+                    "It can be paused with update_task(status='cancelled') if really needed."
+                )
+        except Exception as e:
+            logger.warning("[del_task] Не удалось проверить тип задачи #%s: %s", id, e)
+
     try:
         is_deleted = await db_tasks.db_del_task(id)
 
@@ -1119,6 +1198,130 @@ async def del_task(id: int, db_tasks, scheduler) -> str:
         logger.error(f"[del_task] Unexpected error while deleting task #{id}: {e}", exc_info=True)
         return f"{header}\n[EXCEPTION] Failed to delete task #{id} due to an internal error: {e}"
 
+
+
+###### CLEANER: HISTORY MAINTENANCE ######
+
+async def cleanup_scan(cleaner=None) -> str:
+    """Dry run: reports how many junk and duplicate messages would be deleted. Nothing is deleted."""
+    header = "=== Cleanup Scan (dry run) ==="
+
+    if not cleaner:
+        logger.error("[cleanup_scan] Cleaner service is not available.")
+        return f"{header}\n[CRITICAL ERROR] Cleaner service is unavailable."
+
+    try:
+        stats = await cleaner.scan()
+    except Exception as e:
+        logger.error("[cleanup_scan] Scan failed: %s", e, exc_info=True)
+        return f"{header}\n[EXCEPTION] Scan failed: {e}"
+
+    return (
+        f"{header}\n"
+        f"• Messages in DB: {stats['total']}\n"
+        f"• Empty / media without text: {stats['empty'] + stats['media']}\n"
+        f"• Chatter ('ok', ')', 'hi'...): {stats['chatter']}\n"
+        f"• Exact duplicates (same chat + day): {stats['dups']}\n"
+        f"• TOTAL to delete: {stats['candidates']}\n"
+        f"• Will remain: {stats['after']}"
+    )
+
+
+async def cleanup_run(confirm: bool = False, cleaner=None) -> str:
+    """Permanently deletes junk and duplicate messages from history, then vacuums the table. Requires confirm=true."""
+    header = "=== Cleanup Run ==="
+
+    if not cleaner:
+        logger.error("[cleanup_run] Cleaner service is not available.")
+        return f"{header}\n[CRITICAL ERROR] Cleaner service is unavailable."
+
+    if not confirm:
+        return (
+            f"{header}\n[NOT EXECUTED] This permanently deletes messages. "
+            "Run cleanup_scan first to preview, then call again with confirm=true."
+        )
+
+    try:
+        report = await cleaner.run_hygiene()
+    except Exception as e:
+        logger.error("[cleanup_run] Cleanup failed: %s", e, exc_info=True)
+        return f"{header}\n[EXCEPTION] Cleanup failed: {e}"
+
+    return (
+        f"{header}\n"
+        f"• Junk deleted: {report['deleted_junk']}\n"
+        f"• Duplicates deleted: {report['deleted_dups']}\n"
+        f"• Messages: {report['total_before']} -> {report['total_after']}\n"
+        f"• Table size: {report['size_before']} -> {report['size_after']}\n"
+        f"• Vacuum: {'ok' if report['vacuum'] else 'skipped (see logs)'}"
+    )
+
+
+async def digest_run(max_batches: int = 3, cleaner=None) -> str:
+    """Compresses the oldest history batches into digests. Raw messages are deleted after the digest is stored."""
+    header = "=== History Digest Run ==="
+
+    if not cleaner:
+        logger.error("[digest_run] Cleaner service is not available.")
+        return f"{header}\n[CRITICAL ERROR] Cleaner service is unavailable."
+
+    try:
+        batches = max(1, min(int(max_batches or 1), 20))
+    except (TypeError, ValueError):
+        batches = 1
+
+    try:
+        report = await cleaner.run_digest(max_batches=batches)
+    except Exception as e:
+        logger.error("[digest_run] Digest failed: %s", e, exc_info=True)
+        return f"{header}\n[EXCEPTION] Digest failed: {e}"
+
+    if report.get("skipped"):
+        reason = report.get("reason")
+        if reason == "empty_backlog":
+            return f"{header}\n[NOTHING TO DO] No messages older than the quarantine window."
+        if reason == "already_running":
+            return f"{header}\n[BUSY] A digest run is already in progress."
+        return f"{header}\n[SKIPPED] {reason}"
+
+    return (
+        f"{header}\n"
+        f"• Batches compressed: {report.get('batches', 0)}\n"
+        f"• Messages digested: {report.get('messages', 0)}\n"
+        f"• Chats touched: {report.get('chats', 0)}\n"
+        f"• Failed batches: {report.get('failed', 0)}"
+    )
+
+
+async def digest_list(chat_id: int = None, limit: int = 5, cleaner=None) -> str:
+    """Lists stored chat digests (compressed history) for one chat or for all chats."""
+    header = "=== Chat Digests ==="
+
+    if not cleaner:
+        logger.error("[digest_list] Cleaner service is not available.")
+        return f"{header}\n[CRITICAL ERROR] Cleaner service is unavailable."
+
+    try:
+        rows = await cleaner.list_digests(chat_id=chat_id, limit=max(1, min(int(limit or 5), 20)))
+    except Exception as e:
+        logger.error("[digest_list] Failed: %s", e, exc_info=True)
+        return f"{header}\n[EXCEPTION] {e}"
+
+    if not rows:
+        return f"{header}\nNo digests found."
+
+    lines = []
+    for row in rows:
+        period_from = row.get("period_from")
+        period_to = row.get("period_to")
+        lines.append(
+            f"• [#{row.get('id')} | Chat: {row.get('chat_id')} | "
+            f"{to_cleen(period_from):%d.%m.%Y} — {to_cleen(period_to):%d.%m.%Y} | "
+            f"msgs: {row.get('msg_count')}]\n"
+            f"  {str(row.get('summary') or '').strip()[:400]}"
+        )
+
+    return f"{header} ({len(lines)})\n" + "\n\n".join(lines)
 
 
 ###### CHANGE LLM MODEL ######
@@ -1169,9 +1372,9 @@ FUNCTIONS = {
 
     "think": {
         "description": (
-            "Use this to reason privately before acting: plan a multi-step task, "
-            "choose the next tool, or verify assumptions. It changes nothing and returns OK. "
-            "Skip it for simple one-step requests; keep thoughts concise."
+            "Private scratchpad for your own reasoning. Call it whenever and as often as you need: "
+            "to plan, compare options, verify assumptions, or structure an answer. "
+            "It changes nothing and returns OK. The thought is never shown to the user."
         ),
         "function": think,
         "schema": {
@@ -1183,6 +1386,39 @@ FUNCTIONS = {
                 }
             },
             "required": ["thought"]
+        }
+    },
+
+    "ask_options": {
+        "description": (
+            "FINAL STEP ONLY. Attaches 2-6 tappable reply options to the answer you have just written. "
+            "Pressing an option sends it as the user's next message. Calling this tool ends the current "
+            "agent turn immediately: no more tools and no more text are produced afterwards. "
+            "Use it only when this turn's work is finished, to offer concrete next steps."
+        ),
+        "function": ask_options,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "question": {
+                    "type": "string",
+                    "description": (
+                        "Short line shown under your answer, above the buttons (e.g. 'Что дальше?'). "
+                        "Write it in the user's language. Optional if the answer itself already ends with a question."
+                    )
+                },
+                "options": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "minItems": 2,
+                    "maxItems": 6,
+                    "description": (
+                        "2-6 short replies the user might send next, max 60 characters each. "
+                        "Each option must be a complete, self-contained message."
+                    )
+                }
+            },
+            "required": ["options"]
         }
     },
 
@@ -1369,7 +1605,7 @@ FUNCTIONS = {
                 
                 # --- Флаги доступа ---
                 "is_admin": {"type": "boolean", "description": "Set admin status."},
-                "is_blocked": {"type": "boolean", "description": "Block or unblock user."},
+                "is_blocked": {"type": "boolean", "description": "Block or unblock user. Blocked users' messages are still saved to history but never appear in the inbox widget."},
                 "is_whitelisted": {"type": "boolean", "description": "Priority queue whitelist status."},
                 
                 # --- Настройки и модели ---
@@ -1646,6 +1882,67 @@ FUNCTIONS = {
                 }
             },
             "required": ["name_model"]
+        }
+    },
+
+    # CLEANER: HISTORY MAINTENANCE
+
+    "cleanup_scan": {
+        "description": "Dry run report of history cleanup: how many junk messages (empty, media without text, 'ok'/'hi' chatter) and exact duplicates would be deleted. Deletes nothing. Run this before cleanup_run.",
+        "function": cleanup_scan,
+        "schema": {
+            "type": "object",
+            "properties": {},
+            "required": []
+        }
+    },
+
+    "cleanup_run": {
+        "description": "Permanently deletes junk and duplicate messages from history and vacuums the table. Irreversible. Call ONLY on explicit user request, after showing cleanup_scan numbers.",
+        "function": cleanup_run,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "confirm": {
+                    "type": "boolean",
+                    "description": "Must be true to actually delete. Without it the tool only explains what to do."
+                }
+            },
+            "required": ["confirm"]
+        }
+    },
+
+    "digest_run": {
+        "description": "Compresses the oldest history batches into digests (chat_digests) and deletes the raw messages afterwards. Old messages only (quarantine 7 days). Runs a limited number of batches.",
+        "function": digest_run,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "max_batches": {
+                    "type": "integer",
+                    "description": "How many batches to process now, 1-20 (one batch is about 50 messages of one chat). Default 3."
+                }
+            },
+            "required": []
+        }
+    },
+
+    "digest_list": {
+        "description": "Lists stored history digests (compressed conversation records) for one chat or all chats.",
+        "function": digest_list,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "chat_id": {
+                    "type": "integer",
+                    "description": "Telegram chat/user ID. Omit to list digests across all chats."
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Number of digests to return, default 5."
+                }
+            },
+            "required": []
         }
     }
 
