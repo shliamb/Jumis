@@ -18,6 +18,7 @@ from database.memories import DBMemories
 from database.users import DBUsers
 from database.messages import DBMessages
 from database.tasks import DBTasks
+from database.rss import DBRss
 from scheduler.scheduler import SmartScheduler
 # from response.worker import ResponseWorker
 from jumis_agent.jumis_agent import JumisAgent
@@ -30,6 +31,8 @@ from handlers.dispatcher import dp
 from telethoner.worker_telethon import myTelethon
 from ingest.worker import IngestionWorker
 from cleaner import Cleaner
+from pgbackup import Backups
+from rss import RssNews
 
 
 
@@ -152,6 +155,21 @@ async def main_bot() -> None:
     dp["cleaner"] = cleaner
     await cleaner.ensure_schema()
 
+    # Модуль бэкапа БД: pg_dump в jumis/backups, ротация, системный крон 04:30
+    backups = Backups(
+        db_tasks=db_tasks,
+        scheduler=scheduler,
+    )
+    llm.backups = backups
+    dp["backups"] = backups
+
+    # Модуль мировых новостей: фиды в БД, сводки со сносками, архив выжимок
+    db_rss = DBRss()
+    rss = RssNews(db_rss=db_rss, llm=llm)
+    llm.rss = rss
+    dp["rss"] = rss
+    await rss.ensure_seeded()  # стартовый набор фидов при пустой таблице
+
 
     # Проверим динамическое получение категорий фактов:
     facts_category = await llm.get_tools_for_agent(["write_fact"])
@@ -205,6 +223,7 @@ async def main_bot() -> None:
     scheduler.set_agent(jumis_agent)
     scheduler.set_bot(dp.bot)
     cleaner.register()  # обработчик ночной уборки в планировщике
+    backups.register()  # обработчик ночного бэкапа в планировщике
 
     logger.info("Starting services: aiogram polling, telethon, ingest, agent")
 
@@ -218,6 +237,9 @@ async def main_bot() -> None:
 
         # Крон уборки обязан существовать: если его нет — создаём, если протух — оживляем.
         await cleaner.ensure_system_task()
+
+        # То же для ночного бэкапа.
+        await backups.ensure_system_task()
 
         while True:
             # Запускаем приветствие как неблокирующую фоновую задачу

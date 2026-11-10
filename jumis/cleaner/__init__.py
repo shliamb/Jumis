@@ -12,7 +12,7 @@
 """
 from logs.set_logger import logger
 
-from cleaner.schema import ensure_schema
+from database.create_tables import ensure_schema as ensure_db_schema
 from cleaner.janitor import Janitor
 from cleaner.digest import Digester
 from cleaner.task import (
@@ -48,7 +48,8 @@ class Cleaner:
 
     # ------------------------------------------------------------------ схема
     async def ensure_schema(self) -> bool:
-        return await ensure_schema(self.db)
+        """Схема дайджестов объявлена в database/create_tables.py — единое место для всех таблиц."""
+        return await ensure_db_schema(self.db)
 
     # ------------------------------------------------------------------ слой 1
     async def scan(self) -> dict:

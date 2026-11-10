@@ -4,15 +4,15 @@
 
 Слой работы с LLM через LiteLLM:
 
-- `llm_router.py` — `LLMWorker`: каталог моделей по активным ключам, выбор default/cheap/smart, диалог, стриминг, вызов инструментов, валидация и откат истории.
+- `llm_router.py` — `LLMWorker`: каталог моделей по активным ключам, выбор default/cheap/smart, диалог, стриминг, вызов инструментов, валидация и откат истории. `simple_call`/`_call_request` принимают необязательный `timeout` — персональный лимит на вызов для длинных генераций (по умолчанию общий `LLM_TIMEOUT`).
 - `agents.py` — системный промпт и список инструментов `jumis_agent`, человекочитаемые статусы тулзов.
-- `functions.py` — реализация 27 инструментов + JSON-схемы `FUNCTIONS` (23 подключены к агенту).
+- `functions.py` — реализация 33 инструментов + JSON-схемы `FUNCTIONS` (29 подключены к агенту).
 - `token_usege.py` — `DBTokenLogger` (callback LiteLLM) для учёта расхода токенов.
 
 ## Входные данные
 
 - `.env.llm`: `DEEPSEEK_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `XAI_API_KEY` (наличие ключа включает провайдера).
-- `AGENTS["jumis_agent"]`: `system` + `tools` (23 инструмента; `get_pending_queue`, `get_categories_facts`, `get_categories_users` и `update_fact` в этом списке отсутствуют).
+- `AGENTS["jumis_agent"]`: `system` + `tools` (29 инструментов; `get_pending_queue`, `get_categories_facts`, `get_categories_users` и `update_fact` в этом списке отсутствуют).
 - `FUNCTIONS`: `description`, `function`, `schema` (JSON Schema) на каждый инструмент.
 - Настройки: `HISTORY_LIMIT` (30), `LLM_TIMEOUT` (30 с), `LLM_TEMPERATURE` (0.1, `None` — не передавать), `DEFAULT_FALLBACK_MODEL`.
 - Аргументы инструментов приходят от LLM; категории (`facts_category`, `user_category`) подставляются динамически из БД.
@@ -32,7 +32,7 @@
 2. `refresh_llm_models`: профиль админа из `users` → `model_default/model_cheap/model_smart`, `current_model = model_default`; при отсутствии профиля — `DEFAULT_FALLBACK_MODEL`.
 3. `change_model("default"|"cheap"|"smart"|"provider/model")`: переключает `current_model`, возвращает bool.
 4. `get_tools_for_agent`: deepcopy схемы, подстановка enum категорий из `db_memory.fact_categories` / `db_users.users_categories` (фолбэки `fact` / `not_defined`).
-5. `call_function`: по сигнатуре функции автоматически внедряет `db_memory`, `db_users`, `db_messages`, `db_tasks`, `scheduler`, `mytelethon`, `jumis_agent`, `queue_new_mess`, `llm`, `cleaner`; поддерживает callable и `{"function": ...}`.
+5. `call_function`: по сигнатуре функции автоматически внедряет `db_memory`, `db_users`, `db_messages`, `db_tasks`, `scheduler`, `mytelethon`, `jumis_agent`, `queue_new_mess`, `llm`, `cleaner`, `backups`; поддерживает callable и `{"function": ...}`.
 6. `_call_request`: валидация `dialog` → при битом JSON откат на `old_dialog`; system добавляется первым; `backup_dialog` для отката при ошибке; стрим через `stream_wrapper`, успешное завершение сохраняет `old_dialog = deepcopy(dialog)`.
 7. `_safe_trim` режет историю до `HISTORY_LIMIT`, начиная с ближайшего `user` (не рвёт tool-пары).
 8. `refine_stream_tools` накапливает tool_calls по `index`, отдаёт их одним блоком после конца стрима.
@@ -47,8 +47,12 @@
 13. `update_user`: `is_blocked=true` только помечает пользователя в БД — сообщения продолжают сохраняться в историю, но `ingest` их в виджет не пускает; описание поля в схеме инструмента прямо об этом предупреждает, чтобы агент не обещал «полный игнор».
 
 14. Инструменты обслуживания истории (модуль `cleaner`): `cleanup_scan` — сухой отчёт уборки; `cleanup_run(confirm=true)` — без `confirm` только объясняет, что удаление необратимо; `digest_run(max_batches=3)` — порционная самаризация старых батчей (сырое удаляется после дайджеста); `digest_list(chat_id, limit=5)` — сохранённые дайджесты.
+15. Инструменты бэкапа (модуль `pgbackup`): `backup_now` — снять дамп сейчас (безопасно: только чтение базы + файл, старые копии сворачиваются до 3); `backup_list(limit=10)` — список файлов с размером и датой + подсказка по восстановлению. Подтверждения не требуют.
 
 15. Защита системного крона: `del_task` возвращает `[FORBIDDEN]` для `task_type='system_cron'` (строку нельзя удалить, только поставить на паузу); `update_task` для неё разрешает менять только `status` — название, тип, `cron_expression` и инструкция защищены.
+
+16. Новости (`rss`): `rss_digest(hours, fresh)` → сводка + сохранение в `rss_digests`; `rss_archive(days, query, limit, digest_id)` → короткие выжимки или полная по id; `rss_feeds()` → список с состоянием; `rss_feeds_edit(add, remove, note)` → добавление/удаление одного фида. Внедрение сервиса — по имени параметра `rss` (как `cleaner` и `backups`): `LLMWorker.rss` ставится в `run_bot` после создания модуля.
+17. Правило в системном промпте: сводку владельцу отдавать как есть — со сносками в скобках и блоком выводов, не пересказывая своими словами и не добавляя фактов, которых в сводке нет.
 
 ## Обработка ошибок
 
@@ -62,3 +66,6 @@
 - `get_tools` с неизвестным агентом → `KeyError` с перечнем доступных.
 - `simple_call`/`call_with_tools` без `system` → `ValueError`.
 - `refresh_llm_models` без `db_users` → `False` + лог.
+
+- `simple_call` без `system` → `ValueError`; сбой модели приходит текстом («Ошибка сети: ...») в `content`, поэтому вызывающий код обязан отличать ошибку от ответа (модуль `rss` делает это через `analyst.looks_like_error`).
+- Персональный `timeout` вызова переопределяет `LLM_TIMEOUT` только для этого запроса; сообщение о таймауте в логе показывает фактический лимит.

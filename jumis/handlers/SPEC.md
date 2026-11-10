@@ -10,8 +10,11 @@ Aiogram-слой Telegram-бота (второй интерфейс, рядом 
 - `options.py` — callback-роутер кнопок-вариантов `ask_options` (`opt:<token>`): выбор становится следующим сообщением агента.
 - `inbox.py` — callback-роутер кнопки «Очистить» под виджетом входящих (`inbox:clear`): снимает очередь и удаляет виджет **без запуска агента**.
 - `cleaner.py` — обслуживание истории: `/cleanup` (предпросмотр + кнопка «Удалить»), `/cleanup_run`, `/digest_now`, `/digests`.
+- `backup.py` — бэкап БД: `/backup` (список + кнопка «Сделать копию»), `/backup_now`, `/backups`.
 - `common.py` — `typing()` и `rights_verification()`.
 - `dispatcher.py` — общий `Dispatcher`; `__init__.py` — порядок роутеров.
+
+- `/rss` — мировые новости: список фидов со статусом и inline-кнопки `rss:digest` / `rss:check` / `rss:edit` (модуль `rss`).
 
 ## Входные данные
 
@@ -19,10 +22,14 @@ Aiogram-слой Telegram-бота (второй интерфейс, рядом 
 - `aiogram.types.CallbackQuery` с `data = "opt:<token>"` — нажатие на вариант ответа `ask_options`.
 - `aiogram.types.CallbackQuery` с `data = "inbox:clear"` — нажатие кнопки «Очистить» под виджетом входящих (кнопку рисует `JumisAgent._inbox_keyboard`).
 - Внедряемые зависимости: `db_users`, `llm`, `json_back`, `jumis_agent`, `bot` (из `dp` workflow data).
-- Команды: `/start`, `/admin`, `/logs`, `/dLogs`, `/reset`, `/uplLLM`, `/getMod`, `/setMod`, `/crTabDb`, `/dowjson`, `/up_users_cat`, `/up_facts_cat`, `/up_users`, `/up_facts`, `/up_messages`, `/up_tasks`, `/allDel`, `/cancel`, `/cleanup`, `/cleanup_run`, `/digest_now`, `/digests`.
-- Внедряемая зависимость `cleaner` (из `dp["cleaner"]`) для команд обслуживания истории.
+- Команды: `/start`, `/admin`, `/logs`, `/dLogs`, `/reset`, `/uplLLM`, `/getMod`, `/setMod`, `/crTabDb`, `/dowjson`, `/up_users_cat`, `/up_facts_cat`, `/up_users`, `/up_facts`, `/up_messages`, `/up_tasks`, `/allDel`, `/cancel`, `/cleanup`, `/cleanup_run`, `/digest_now`, `/digests`, `/backup`, `/backup_now`, `/backups`.
+- Внедряемые зависимости `cleaner` (из `dp["cleaner"]`) и `backups` (из `dp["backups"]`).
 - `CallbackQuery` `data = "clean:run"` / `"clean:cancel"` — подтверждение уборки.
 - Для импорта — прикреплённый `.json` файл.
+
+- `CallbackQuery` `data = "rss:digest"` / `"rss:check"` / `"rss:edit"` — кнопки под списком источников.
+- `F.text` в состоянии FSM `RssStates.waiting_list` — новый список фидов построчно (`URL` или `URL | заметка`).
+- Внедряемая зависимость `rss` (из `dp["rss"]`).
 
 ## Выходные данные
 
@@ -35,11 +42,18 @@ Aiogram-слой Telegram-бота (второй интерфейс, рядом 
 - Нажатие `inbox:clear`: `jumis_agent.pending_peers` очищен, виджет удалён, тост «🧹 Очищено» / «🧹 Cleared»; агент и LLM не вызываются (0 токенов).
 - `/cleanup`: сообщение с числами предпросмотра и inline-кнопками «✅ Удалить» / «❌ Отмена».
 - `clean:run`: `cleaner.run_hygiene()` и отчёт (мусор, дубли, было/стало, размер, VACUUM).
+- `/backup`: список копий (имя, размер, время), суммарный объём, лимит хранения, подсказка по восстановлению + inline-кнопка `backup:run`.
 - `/digest_now [N]`: до N (1–20, по умолчанию 5) батчей самаризации и отчёт; `/digests [chat_id]`: последние 5 дайджестов.
+
+- `/rss`: список источников (иконка статуса, название, заметка, url, свежесть, последняя ошибка) + клавиатура из трёх кнопок.
+- `rss:digest`: `rss.collect()` (свежая сводка моложе 2 ч отдаётся из кэша) → markdown переводится в читаемый текст, длинный ответ режется по абзацам на куски ≤3500 символов.
+- `rss:check`: `rss.check_all()` → отчёт «живых N из M» и подсказка, как убрать мёртвые.
+- `rss:edit` → FSM `RssStates.waiting_list` → `rss.replace_from_text(text)` → отчёт «принято N / отклонено M» с причинами, затем обновлённый список.
 
 ## Логика (Вариации)
 
-1. Порядок роутеров: `start` → `admin` → `options` → `inbox` → `get_message`; первый совпавший обрабатывает событие.
+1. Порядок роутеров: `start` → `admin` → `options` → `inbox` → `cleaner` → `backup` → `rss` → `get_message`; первый совпавший обрабатывает событие. `rss` стоит до fallback-роутера, иначе текст нового списка фидов улетел бы в агента.
+1a. `/rss` и `rss:*`: проверка `rights_verification` для команды, `from_user.id == ADMIN_ID` для кнопок (иначе alert «Нет доступа»). `rss:edit` ставит FSM `RssStates.waiting_list`; обработчик текста проверяет `ADMIN_ID`, сразу снимает состояние и работает только с текстом. Тост «Собираю сводку...» показывается до начала работы, потому что сбор занимает секунды.
 2. `rights_verification`: только `message.chat.type == "private"` и `user_id == ADMIN_ID`; иначе отказ (ru/en) и запись в лог.
 3. `/start`: `typing` → права → отказ ботам → `db_users.chek_tg_id` (INSERT ... ON CONFLICT) → сообщение «уже зарегистрирован» или создание записи `is_admin=True`; факт регистрации пишется в лог.
 4. `/admin`: статическое меню команд (включая `/logs` и `/dLogs`).
@@ -53,6 +67,8 @@ Aiogram-слой Telegram-бота (второй интерфейс, рядом 
 12. `/cleanup`: права → `cleaner.scan()` (ничего не удаляет) → текст с разбивкой (пустые/медиа, болтовня, дубли, «итого»/«останется») + клавиатура `clean:run` / `clean:cancel`.
 13. `clean:run`: повторная проверка `ADMIN_ID` (иначе alert и error в лог) → `cleaner.run_hygiene()` → результат редактирует сообщение предпросмотра, снимая кнопки; при `TelegramBadRequest` отправляется новым сообщением.
 14. `/cleanup_run`: то же без предпросмотра (для тех, кто уже смотрел `/cleanup`). `/digest_now`: парсит число батчей (1–20, по умолчанию 5), сначала предупреждает о длительности, затем отчёт.
+15. `/crTabDb`: `create_tables_in_db()` (psycopg2, блокирующий) вызывается через `asyncio.to_thread` — создание таблиц не вешает event loop; сообщение «созданы/ошибка». Создаёт все таблицы, включая `chat_digests`, и векторные индексы.
+16. `/backup`: список копий + кнопка; `backup:run` (проверка `ADMIN_ID`) → `backups.create()` → отчёт (файл, размер, время, сколько старых удалено) редактированием сообщения; `/backup_now` — то же без кнопки, `/backups` — только список.
 15. `/digests [chat_id]`: до 5 дайджестов, каждый — ID, чат, период, число сообщений и первые 600 символов сводки.
 
 ## Обработка ошибок
@@ -66,3 +82,8 @@ Aiogram-слой Telegram-бота (второй интерфейс, рядом 
 - `inbox:clear`: повторное удаление сообщения (виджет уже удалён внутри `clear_pending_queue`) → `TelegramBadRequest` молча игнорируется; если `callback.message` недоступен (`InaccessibleMessage`), удаление пропускается, очередь всё равно очищена.
 - `options`: просроченный или повторно нажатый токен → тост «вариант устарел»; чужой `from_user` → отказ и запись в лог; `agent_busy` → тост «ещё думаю», токен остаётся; ошибка редактирования сообщения → клавиатура снимается через `edit_reply_markup`, запрос агенту всё равно стартует.
 - `/cleanup*`, `/digest*`: без `cleaner` в `dp` → сообщение «модуль чистки недоступен»; ошибка сканирования/уборки → текст исключения в чат и traceback в лог; `clean:cancel` при уже снятой клавиатуре → `TelegramBadRequest` игнорируется.
+- `/backup*`: без `backups` в `dp` → «модуль бэкапа недоступен»; ошибка дампа показывается текстом (`🚫 Бэкап не удался: ...`); повторный запуск во время дампа → «уже идёт»; чужой пользователь на `backup:run` → alert + error в лог.
+
+- `/rss*`: без `rss` в `dp` → «модуль новостей недоступен»; `busy` (сводка уже собирается) → «⏳ Сводка уже собирается»; неудачный сбор → текст причины + перечень не ответивших фидов; чужой пользователь на кнопке → alert + запись в лог.
+- `rss:edit` без текста (стикер, фото) — обработчик не сработает, состояние останется; `/rss` его снимает неявно (повторный вызов меню не ломает FSM).
+- `TelegramBadRequest` при показе списка после замены → warning в лог, отчёт уже отправлен.

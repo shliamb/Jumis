@@ -4,6 +4,19 @@ from logs.set_logger import logger
 from database import db
 
 
+# Колонки users, которые вообще можно обновлять. Ключи словаря приходят из
+# инструментов агента, поэтому имя колонки в SQL попадает только из этого списка:
+# галлюцинированное поле не может ни сломать запрос, ни подменить WHERE.
+USER_UPDATABLE_COLUMNS = frozenset({
+    "username", "full_name", "phone",
+    "category", "comment", "summary",
+    "aliases", "aliases_vector",
+    "is_admin", "is_blocked", "is_whitelisted", "is_bot",
+    "lang_code",
+    "model_default", "model_cheap", "model_smart",
+})
+
+
 
 
 class DBUsers():
@@ -170,6 +183,11 @@ class DBUsers():
         values = []
         
         for key, val in data.items():
+            # Белый список колонок: ключи приходят от модели, не из кода
+            if key not in USER_UPDATABLE_COLUMNS:
+                logger.warning("db_update_user: Неизвестное поле '%s' отброшено.", key)
+                continue
+
             param_idx = len(values) + 1
 
             # Проверка и подготовка эмбеддинга для pgvector
@@ -193,7 +211,11 @@ class DBUsers():
                 set_parts.append(f"{key} = ${param_idx}")
                 values.append(val)
 
-        # Автоматически обновляем штамп времени изменения
+        # Ни одного допустимого поля не осталось — обновлять нечего
+        if not set_parts:
+            logger.error("db_update_user: нет допустимых полей для обновления: %s", sorted(data))
+            return False
+
         set_parts.append("updated_at = NOW()")
 
         # 4. Определяем плейсхолдер для условия WHERE

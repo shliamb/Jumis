@@ -10,7 +10,7 @@ from aiogram import types
 from typing import Any, Dict, List
 from aiogram.types import FSInputFile
 from logs.set_logger import logger
-from utils.common import get_date_str
+from utils.common import get_date_str, to_app_tz_naive
 from config import PATH_JSON, ADMIN_ID
 
 
@@ -51,8 +51,12 @@ class JsonBackup():
     def _json_serializer(obj: Any) -> Any:
         """Сериализатор: из типов Python/БД в валидный JSON-формат."""
         if isinstance(obj, datetime.datetime):
-            return obj.replace(tzinfo=None).isoformat()
-            # return obj.isoformat()
+            # В проекте всё время — настенное в TIME_ZONE. asyncpg отдаёт
+            # TIMESTAMPTZ в UTC, поэтому сначала переводим в нашу зону:
+            # иначе при восстановлении штампы уедут на смещение пояса.
+            if obj.tzinfo is not None:
+                obj = to_app_tz_naive(obj)
+            return obj.isoformat()
         if isinstance(obj, datetime.date):
             return obj.isoformat()
         if isinstance(obj, UUID):
@@ -79,7 +83,11 @@ class JsonBackup():
                 try:
                     # 1. Парсим ISO-строку в datetime
                     dt = datetime.datetime.fromisoformat(val)
-                    parsed_rec[key] = dt.replace(tzinfo=None)
+                    # Со смещением (старые файлы вида +00:00) — приводим к нашей зоне,
+                    # без смещения — считаем, что это уже настенное время приложения
+                    if dt.tzinfo is not None:
+                        dt = to_app_tz_naive(dt)
+                    parsed_rec[key] = dt
                 except ValueError:
                     parsed_rec[key] = val
             else:
@@ -300,7 +308,7 @@ class JsonBackup():
             "03_users": getattr(self.db_users, "add_user", None),
             "04_facts": getattr(self.db_memory, "add_fact", None),
             "05_messages": getattr(self.db_messages, "add_message", None),
-            "06_tasks": getattr(self.db_tasks, "add_task", None),
+            "06_tasks": getattr(self.db_tasks, "db_add_task", None),
         }
 
         db_handler = save_handlers.get(name_action)

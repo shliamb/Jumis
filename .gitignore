@@ -11,6 +11,7 @@ models_cache/huggingface
 models_cache/torch
 models_cache/embeddings
 jumis/json
+jumis/backups/
 jumis/logs/files/*.log
 jumis/logs/files/*.log.*
 downloads

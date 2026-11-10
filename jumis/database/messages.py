@@ -4,6 +4,16 @@ from logs.set_logger import logger
 from database import db
 
 
+# Колонки messages, которые можно писать. INSERT собирается из ключей словаря,
+# поэтому лишний ключ не должен попадать в SQL.
+MESSAGE_COLUMNS = frozenset({
+    "chat_id", "sender_id", "recipient_id", "tg_msg_id",
+    "direction", "content", "msg_type",
+    "media_file_id", "media_local_path", "media_duration",
+    "embedding", "is_embedded", "created_at",
+})
+
+
 
 
 class DBMessages():
@@ -29,6 +39,15 @@ class DBMessages():
             return None
 
         data_dict = data.copy()
+
+        # Только известные колонки messages
+        unknown = set(data_dict) - MESSAGE_COLUMNS
+        if unknown:
+            logger.error("[DBMessages] Неизвестные поля отброшены: %s", sorted(unknown))
+            for key in unknown:
+                data_dict.pop(key, None)
+            if not data_dict:
+                return None
 
         # Форматируем вектор под каст $N::vector для pgvector
         has_embedding = False

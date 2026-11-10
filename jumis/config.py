@@ -49,6 +49,7 @@ PATH_LOGS = "/jumis/logs/files" if DOCKER else os.path.join(BASE_DIR, "jumis", "
 # PATH_LOGS = "/logs/" if DOCKER else "../logs/"
 DOWNLOAD = "/jumis/downloads/" if DOCKER else "jumis/downloads"
 PATH_JSON = "/jumis/json/" if DOCKER else "jumis/json"
+PATH_BACKUPS = "/jumis/backups" if DOCKER else os.path.join(BASE_DIR, "jumis", "backups")
 # OUTPUT = "/jumis/output/" if DOCKER else "../jumis/output/"
 # SYST_CONT_FOLDER = "/" if DOCKER else "../"
 

@@ -6,26 +6,37 @@ import asyncpg
 
 
 
-
 class Database:
-    """ Work to data in DB """
+    """ Пул соединений к PostgreSQL: соединения создаются один раз и выдаются по запросу """
+
+    # Таймауты (секунды):
+    #   CONNECT_TIMEOUT — установка нового TCP-соединения;
+    #   ACQUIRE_TIMEOUT — ожидание свободного соединения из пула (иначе ждём вечно);
+    #   COMMAND_TIMEOUT — выполнение одного запроса (зависший запрос не держит лок).
+    CONNECT_TIMEOUT = 10
+    ACQUIRE_TIMEOUT = 30
+    COMMAND_TIMEOUT = 60
+
     def __init__(self):
         self.pool = None
-    
+        self._closed = False
+
 
     async def connect(self):
         """ Создаем пул при запуске бота """
         if self.pool is None:
+            self._closed = False
             self.pool = await asyncpg.create_pool(
                 host=HOST,
                 port=PORT,
                 database=DB_NAME,
                 user=USER_DB,
                 password=PASSWORD_DB,
-                min_size=5, # 5 соединений всегда готовы
-                max_size=50, # максимум 50 одновременных
-                max_queries=50000, # после 50к запросов - пересоздать соединение
-                timeout=30, # ждать свободное соединение 30 секунд
+                min_size=2,  # 2 соединения всегда готовы (бот обслуживает одного владельца)
+                max_size=20,  # потолок на случай веера фоновых задач
+                max_queries=50000,  # после 50к запросов - пересоздать соединение
+                timeout=self.CONNECT_TIMEOUT,  # таймаут установки соединения (пробрасывается в connect)
+                command_timeout=self.COMMAND_TIMEOUT,  # таймаут выполнения запроса
                 max_inactive_connection_lifetime=300,  # закрывать неиспользуемые через 5 мин
                 server_settings={'timezone': TIME_ZONE}
             )
@@ -37,16 +48,21 @@ class Database:
     async def close(self):
         """ Закрываем пул при остановке """
         if self.pool:
+            # Статистику снимаем ДО закрытия: после pool.close() её уже не прочитать
+            stats = await self.get_pool_stats()
             await self.pool.close()
             self.pool = None
-            logger.info("Database pool closed")
-            stat = await self.get_pool_stats()
-            logger.info("Database pool closed: %s", stat)
+            self._closed = True
+            logger.info("Database pool closed: %s", stats)
 
 
     async def _ensure_connected(self):
         """Внутренний метод: убедиться что подключены"""
         if self.pool is None:
+            # После осознанного shutdown пул не воскрешаем: иначе закрытое
+            # соединение остаётся висеть, а ошибка выглядит как успех.
+            if self._closed:
+                raise RuntimeError("Database pool is closed")
             await self.connect()
 
 
@@ -54,40 +70,39 @@ class Database:
         """Получить статистику пула"""
         if not self.pool:
             return "Пул не создан"
-        
+
         total = self.pool.get_size()      # всего соединений
         idle = self.pool.get_idle_size()  # свободных сейчас
         used = total - idle               # занятых
-        #print(f"Total: {total}, Idle: {idle}, Used: {used}")
         return {
             "total": total,
             "used": used,
             "idle": idle,
             "percent_used": (used / total * 100) if total > 0 else 0
         }
-        
+
 
     async def fetch(self, query, *args) -> list[dict]:
         """Выполнить SELECT и получить все строки"""
         # для: SELECT * FROM ...
         await self._ensure_connected()
-        async with self.pool.acquire() as conn:
+        async with self.pool.acquire(timeout=self.ACQUIRE_TIMEOUT) as conn:
             return await conn.fetch(query, *args)
-    
+
 
     async def fetchrow(self, query, *args) -> dict:
         """Выполнить запрос и получить первую строку"""
         # для: SELECT ... LIMIT 1 или INSERT ... RETURNING
         await self._ensure_connected()
-        async with self.pool.acquire() as conn:
+        async with self.pool.acquire(timeout=self.ACQUIRE_TIMEOUT) as conn:
             return await conn.fetchrow(query, *args)
-    
+
 
     async def execute(self, query, *args):
         """Выполнить запрос без возврата данных"""
         # для: INSERT/UPDATE/DELETE без RETURNING
         await self._ensure_connected()
-        async with self.pool.acquire() as conn:
+        async with self.pool.acquire(timeout=self.ACQUIRE_TIMEOUT) as conn:
             return await conn.execute(query, *args)
 
 
@@ -95,7 +110,5 @@ class Database:
         """ Выполнить запрос и получить одно значение (например, RETURNING id)"""
         # для: SELECT id FROM ... или INSERT ... RETURNING id
         await self._ensure_connected()
-        async with self.pool.acquire() as conn:
+        async with self.pool.acquire(timeout=self.ACQUIRE_TIMEOUT) as conn:
             return await conn.fetchval(query, *args)
-        
-

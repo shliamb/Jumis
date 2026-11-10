@@ -3,6 +3,85 @@ import psycopg2
 from logs.set_logger import logger
 
 
+# =====================================================================
+# ЕДИНОЕ МЕСТО СХЕМЫ БД
+#
+# Здесь объявлены все таблицы и индексы. Два входа используют одни и те же
+# операторы: `create_tables_in_db()` (psycopg2, команда `/crTabDb`) и
+# `ensure_schema(db)` (asyncpg, старт бота). Модули не объявляют таблиц сами.
+# =====================================================================
+
+# Векторный HNSW-индекс по истории: без него `msg_search` перечитывает и
+# сортирует все векторы (12k × 3 КБ), с ним — идёт по графу ближайших соседей.
+SQL_MESSAGES_EMBEDDING_INDEX = """
+CREATE INDEX IF NOT EXISTS idx_messages_embedding
+    ON messages USING hnsw (embedding vector_cosine_ops);
+"""
+
+# Дайджесты старой истории (модуль cleaner). Рабочие таблицы не меняются —
+# это единственная НОВАЯ таблица, и она объявлена здесь, вместе с остальными.
+SQL_CHAT_DIGESTS = (
+    """
+    CREATE TABLE IF NOT EXISTS chat_digests (
+        id BIGSERIAL PRIMARY KEY,
+        chat_id BIGINT NOT NULL,
+        period_from TIMESTAMPTZ NOT NULL,
+        period_to TIMESTAMPTZ NOT NULL,
+        msg_count INT NOT NULL DEFAULT 0,
+        summary TEXT NOT NULL,
+        facts TEXT,
+        model VARCHAR(100),
+        created_at TIMESTAMPTZ DEFAULT NOW()
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_chat_digests_chat
+        ON chat_digests (chat_id, period_to DESC)
+    """,
+)
+
+# Мировые новости (модуль rss).
+#   rss_feeds   — откуда берём: список фидов и их здоровье;
+#   rss_digests — что накопили: сводка (body) и короткая выжимка (gist).
+# Сводки пишутся только добавлением, поэтому индекс по времени DESC.
+SQL_RSS = (
+    """
+    CREATE TABLE IF NOT EXISTS rss_feeds (
+        id SERIAL PRIMARY KEY,
+        url TEXT NOT NULL UNIQUE,
+        title VARCHAR(200),
+        note VARCHAR(200),
+        active BOOLEAN NOT NULL DEFAULT TRUE,
+        last_ok_at TIMESTAMPTZ,
+        last_item_at TIMESTAMPTZ,
+        last_error TEXT,
+        fail_count INT NOT NULL DEFAULT 0,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_rss_feeds_active ON rss_feeds (active)
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS rss_digests (
+        id SERIAL PRIMARY KEY,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        period_from TIMESTAMPTZ NOT NULL,
+        period_to TIMESTAMPTZ NOT NULL,
+        gist TEXT NOT NULL,
+        body TEXT NOT NULL,
+        items_count INT NOT NULL DEFAULT 0,
+        feeds_used INT NOT NULL DEFAULT 0,
+        feeds_failed TEXT,
+        model VARCHAR(100)
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_rss_digests_created ON rss_digests (created_at DESC)
+    """,
+)
+
+
 
 
 # Create TABLES:
@@ -128,6 +207,7 @@ def create_tables_in_db():
 
         '''
         cursor.execute(create_table_messages)
+        cursor.execute(SQL_MESSAGES_EMBEDDING_INDEX)
 
 
         create_table_facts_categories = '''
@@ -256,6 +336,14 @@ def create_tables_in_db():
         '''
         cursor.execute(create_table_scheduled_tasks)
 
+        # Новая таблица модуля чистки истории (объявлена в начале файла)
+        for statement in SQL_CHAT_DIGESTS:
+            cursor.execute(statement)
+
+        # Таблицы модуля мировых новостей: фиды и накопленные сводки
+        for statement in SQL_RSS:
+            cursor.execute(statement)
+
 
 
 
@@ -279,6 +367,49 @@ def create_tables_in_db():
             connection.close()
 
 # create_tables_in_db()
+
+
+async def ensure_schema(db) -> bool:
+    """
+    Идемпотентно создаёт объекты, которых может не быть на живой базе:
+    дайджесты истории, таблицы новостей (rss_feeds / rss_digests)
+    и векторный индекс истории.
+
+    Нужен на старте бота: `create_tables_in_db()` синхронный и вызывается
+    только командой `/crTabDb`, а работать чистке, новостям и поиску нужно сразу.
+    Рабочие таблицы не создаёт и не меняет.
+    """
+    ok = True
+
+    # Новые служебные таблицы: дайджесты истории и мировые новости.
+    for label, statements in (("chat_digests", SQL_CHAT_DIGESTS), ("rss", SQL_RSS)):
+        for statement in statements:
+            try:
+                await db.execute(statement)
+            except Exception as e:
+                ok = False
+                logger.error("[Schema] Не удалось применить оператор для %s: %s", label, e, exc_info=True)
+
+    # Индекс можно ставить только если таблица сообщений уже существует.
+    try:
+        # без префикса схемы: имена таблиц в проекте живут по search_path
+        has_messages = await db.fetchval("SELECT to_regclass('messages') IS NOT NULL;")
+    except Exception as e:
+        logger.warning("[Schema] Не удалось проверить наличие messages: %s", e)
+        has_messages = False
+
+    if has_messages:
+        try:
+            await db.execute(SQL_MESSAGES_EMBEDDING_INDEX)
+        except Exception as e:
+            ok = False
+            logger.error("[Schema] Не удалось создать idx_messages_embedding: %s", e, exc_info=True)
+    else:
+        logger.warning("[Schema] Таблицы messages нет — индекс истории пропущен (создайте таблицы: /crTabDb)")
+
+    if ok:
+        logger.info("[Schema] Схема служебных объектов готова: chat_digests + rss_feeds/rss_digests + idx_messages_embedding")
+    return ok
 
 
 

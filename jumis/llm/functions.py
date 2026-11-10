@@ -2,12 +2,15 @@
 import asyncio
 from typing import Any, Dict, List, Optional
 from vector import embedder
-from utils.common import sanitize_human_text, get_now_datetime, get_date_str, to_cleen, get_date_datetime
+from utils.common import sanitize_human_text, get_now_datetime, get_date_str, to_cleen, get_date_datetime, to_app_tz_naive
 from datetime import datetime, timezone, timedelta
 from croniter import croniter
 from config import ADMIN_ID
 from logs.set_logger import logger
-from cleaner.task import is_system_task
+# Регистрируют названия своих кронов: по ним задачи защищены от агента.
+from cleaner.task import TITLE as _CLEANER_CRON_TITLE  # noqa: F401
+from pgbackup.task import TITLE as _BACKUP_CRON_TITLE  # noqa: F401
+from utils.system_cron import is_system_cron as is_system_task
 import json
 
 
@@ -1324,6 +1327,234 @@ async def digest_list(chat_id: int = None, limit: int = 5, cleaner=None) -> str:
     return f"{header} ({len(lines)})\n" + "\n\n".join(lines)
 
 
+###### PGBACKUP: DATABASE BACKUP ######
+
+async def backup_now(backups=None) -> str:
+    """Creates a full pg_dump backup of the database right now and rotates old copies."""
+    header = "=== Database Backup ==="
+
+    if not backups:
+        logger.error("[backup_now] Backup service is not available.")
+        return f"{header}\n[CRITICAL ERROR] Backup service is unavailable."
+
+    report = await backups.create()
+
+    if not report.get("ok"):
+        reason = report.get("error")
+        if reason == "already_running":
+            return f"{header}\n[BUSY] A backup is already in progress."
+        return f"{header}\n[FAILED] {reason}"
+
+    return (
+        f"{header}\n"
+        f"• File: {report['name']}\n"
+        f"• Size: {report['size_human']}\n"
+        f"• Duration: {report['duration']} s\n"
+        f"• Old copies deleted: {len(report.get('deleted') or [])}\n"
+        f"• Copies kept: {report.get('keep')}"
+    )
+
+
+async def backup_list(limit: int = 10, backups=None) -> str:
+    """Lists the stored database backup files, newest first."""
+    header = "=== Database Backups ==="
+
+    if not backups:
+        logger.error("[backup_list] Backup service is not available.")
+        return f"{header}\n[CRITICAL ERROR] Backup service is unavailable."
+
+    try:
+        items = backups.list(limit=max(1, min(int(limit or 10), 20)))
+    except Exception as e:
+        logger.error("[backup_list] Failed: %s", e, exc_info=True)
+        return f"{header}\n[EXCEPTION] {e}"
+
+    if not items:
+        return f"{header}\nNo backups found yet (folder: {backups.directory})."
+
+    lines = [
+        f"• {item['name']} | {item['size_human']} | "
+        f"{to_cleen(item['created_at']):%d.%m.%Y %H:%M}"
+        for item in items
+    ]
+
+    return (
+        f"{header} ({len(lines)})\n"
+        + "\n".join(lines)
+        + f"\n\nTotal size: {backups.human_size(backups.total_size())}, keeping last {backups.keep}. "
+        + f"Restore is manual: {backups.RESTORE_HINT}"
+    )
+
+
+###### WORLD NEWS (rss) ######
+
+STATUS_LABELS = {
+    "ok": "ok",
+    "new": "not checked yet",
+    "warn": "flaky",
+    "stale": "silent",
+    "dead": "dead",
+}
+
+
+def _rss_stamp(dt) -> str:
+    return f"{to_app_tz_naive(dt):%d.%m %H:%M}" if dt else "?"
+
+
+async def rss_digest(hours: int = 12, fresh: bool = False, rss=None) -> str:
+    """Collects a world news digest from all active feeds and stores it in the database."""
+    header = "=== World News Digest ==="
+
+    if not rss:
+        logger.error("[rss_digest] News service is not available.")
+        return f"{header}\n[CRITICAL ERROR] News service is unavailable."
+
+    result = await rss.collect(hours=hours, fresh=fresh)
+
+    if not result.get("ok"):
+        reason = result.get("error")
+        if reason == "busy":
+            return f"{header}\n[BUSY] A digest is already being collected. Try again in a minute."
+        failed = result.get("failed") or []
+        tail = ""
+        if failed:
+            names = ", ".join(f"{r.get('title')} ({r.get('error')})" for r in failed)
+            tail = f"\nFeeds that failed: {names}"
+        return f"{header}\n[FAILED] {reason}{tail}"
+
+    digest = result.get("digest") or {}
+    gist = (digest.get("gist") or "").strip()
+    body = (digest.get("body") or "").strip()
+
+    lines = [
+        header,
+        f"• Digest id: {digest.get('id')}",
+        f"• Period: {_rss_stamp(digest.get('period_from'))} — {_rss_stamp(digest.get('period_to'))} "
+        f"(MSK, last {hours}h)",
+        f"• Items: {digest.get('items_count')} from {digest.get('feeds_used')} feeds",
+    ]
+    if digest.get("feeds_failed"):
+        lines.append(f"• Feeds that failed: {digest['feeds_failed']}")
+    if result.get("cached"):
+        lines.append("• This digest was collected earlier and is still fresh (under 2 hours).")
+
+    if gist:
+        lines.append("")
+        lines.append("SHORT GIST:")
+        lines.append(gist)
+
+    lines.append("")
+    lines.append("FULL DIGEST:")
+    lines.append(body or "(empty)")
+    lines.append("")
+    lines.append(
+        "Give this to the user as a news summary: keep the source attributions in brackets, "
+        "keep the conclusions block separated and marked as an assessment. "
+        "Do not add facts that are not in the digest."
+    )
+    return "\n".join(lines)
+
+
+async def rss_archive(days: int = 30, query: str = None, limit: int = 20,
+                      digest_id: int = 0, rss=None) -> str:
+    """Reads stored news digests: short gists for a period, or one full digest by id."""
+    header = "=== News Archive ==="
+
+    if not rss:
+        logger.error("[rss_archive] News service is not available.")
+        return f"{header}\n[CRITICAL ERROR] News service is unavailable."
+
+    if digest_id:
+        digest = await rss.read(int(digest_id))
+        if not digest:
+            return f"{header}\n[NOT FOUND] No digest with id {digest_id}."
+        return (
+            f"{header}\n"
+            f"• Digest id: {digest.get('id')}\n"
+            f"• Collected: {_rss_stamp(digest.get('created_at'))}\n"
+            f"• Period: {_rss_stamp(digest.get('period_from'))} — {_rss_stamp(digest.get('period_to'))}\n"
+            f"• Items: {digest.get('items_count')} from {digest.get('feeds_used')} feeds\n\n"
+            f"SHORT GIST:\n{(digest.get('gist') or '').strip()}\n\n"
+            f"FULL DIGEST:\n{(digest.get('body') or '').strip()}"
+        )
+
+    days = max(1, min(int(days or 30), 3650))
+    limit = max(1, min(int(limit or 20), 100))
+    rows = await rss.archive(days=days, query=query, limit=limit)
+
+    if not rows:
+        suffix = f" matching '{query}'" if query else ""
+        return f"{header}\nNo digests in the last {days} days{suffix}."
+
+    blocks = [f"{header} (last {days} days, {len(rows)} shown)"]
+    for row in rows:
+        mark = f"id={row['id']} | {_rss_stamp(row.get('period_to'))} | {row.get('items_count')} items"
+        blocks.append(f"[{mark}]\n{(row.get('gist') or '').strip()}")
+    blocks.append("\nThese are short gists only. Call rss_archive again with digest_id to read the full digests.")
+    return "\n\n".join(blocks)
+
+
+async def rss_feeds(rss=None) -> str:
+    """Lists the configured news feeds with their health status."""
+    header = "=== News Feeds ==="
+
+    if not rss:
+        logger.error("[rss_feeds] News service is not available.")
+        return f"{header}\n[CRITICAL ERROR] News service is unavailable."
+
+    feeds = await rss.feeds()
+    if not feeds:
+        return (f"{header}\nNo feeds configured. The owner can replace the list in the admin panel "
+                f"(/rss -> Replace list).")
+
+    lines, dead = [], []
+    for feed in feeds:
+        status = rss.status_of(feed)
+        if status == "dead":
+            dead.append(feed.get("title") or feed.get("url"))
+        note = f" — {feed['note']}" if feed.get("note") else ""
+        last_item = feed.get("last_item_at")
+        freshness = f"last item {_rss_stamp(last_item)}" if last_item else "no items yet"
+        error = f" | error: {feed['last_error']}" if feed.get("last_error") else ""
+        flag = "" if feed.get("active") else " [disabled]"
+        lines.append(
+            f"[id={feed['id']}] {feed.get('title') or feed['url']}{note}{flag} "
+            f"| {STATUS_LABELS.get(status, status)} | {freshness} | fails={feed.get('fail_count') or 0}{error}"
+        )
+
+    text = f"{header} ({len(lines)})\n" + "\n".join(lines)
+    if dead:
+        text += ("\n\nDead feeds (no news for a long time): " + ", ".join(dead) +
+                 ". You may suggest removing them, but only the owner decides.")
+    return text
+
+
+async def rss_feeds_edit(add: str = None, remove: str = None, note: str = None, rss=None) -> str:
+    """Adds one news feed by URL (validated for real) or removes one by id/url/name."""
+    header = "=== News Feeds Edit ==="
+
+    if not rss:
+        logger.error("[rss_feeds_edit] News service is not available.")
+        return f"{header}\n[CRITICAL ERROR] News service is unavailable."
+
+    if not add and not remove:
+        return f"{header}\n[ERROR] Pass either 'add' (feed URL) or 'remove' (id, URL or feed name)."
+
+    if add:
+        report = await rss.add_one(add, note=note)
+        if not report.get("ok"):
+            return f"{header}\n[REJECTED] {report.get('error')} (url: {report.get('url')})"
+        extra = f"\n• {report['note']}" if report.get("note") else ""
+        return (f"{header}\n[ADDED] {report.get('title')} — {report.get('url')}{extra}\n"
+                f"• Items in feed: {report.get('items')}\n"
+                f"• Newest item: {_rss_stamp(report.get('newest'))}")
+
+    deleted = await rss.remove_one(remove)
+    if not deleted:
+        return f"{header}\n[NOT FOUND] No feed matching '{remove}'."
+    return f"{header}\n[REMOVED] {deleted} feed(s) removed. Remember: the owner can restore the whole list in the admin panel."
+
+
 ###### CHANGE LLM MODEL ######
 
 async def change_model(name_model: str = "default", llm=None, **kwargs) -> str:
@@ -1940,6 +2171,131 @@ FUNCTIONS = {
                 "limit": {
                     "type": "integer",
                     "description": "Number of digests to return, default 5."
+                }
+            },
+            "required": []
+        }
+    },
+
+    # PGBACKUP: DATABASE BACKUP
+
+    "backup_now": {
+        "description": "Creates a full database backup file (pg_dump) right now and deletes the oldest copies beyond the keep limit (3). Safe: reads the database, never modifies it. Use when the user asks to back up the database.",
+        "function": backup_now,
+        "schema": {
+            "type": "object",
+            "properties": {},
+            "required": []
+        }
+    },
+
+    "backup_list": {
+        "description": "Lists the stored database backup files with size and date, newest first. Read-only. Use it to tell the user when the last backup was made.",
+        "function": backup_list,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "limit": {
+                    "type": "integer",
+                    "description": "How many copies to show, default 10."
+                }
+            },
+            "required": []
+        }
+    },
+
+    "rss_digest": {
+        "description": (
+            "Collects a world news digest from all configured feeds (different countries and angles), "
+            "merges the same event reported by several outlets into one story with source attributions, "
+            "and SAVES it to the database. Returns a short gist plus the full digest. "
+            "The digest is written in Russian. Use it when the user asks for news, world news, "
+            "'what's happening', a news summary or a digest. A digest younger than 2 hours is returned "
+            "from cache; pass fresh=true to force a new one."
+        ),
+        "function": rss_digest,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "hours": {
+                    "type": "integer",
+                    "description": "How many hours back to cover, default 12, max 72."
+                },
+                "fresh": {
+                    "type": "boolean",
+                    "description": "true = collect a new digest even if a recent one exists."
+                }
+            },
+            "required": []
+        }
+    },
+
+    "rss_archive": {
+        "description": (
+            "Reads already stored news digests. Without digest_id it returns SHORT GISTS for the last N days "
+            "(cheap, good for 'what happened this week/month/year'), optionally filtered by a keyword. "
+            "With digest_id it returns that one digest in full. Read-only."
+        ),
+        "function": rss_archive,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "days": {
+                    "type": "integer",
+                    "description": "How many days back to look, default 30."
+                },
+                "query": {
+                    "type": "string",
+                    "description": "Optional keyword filter inside gists and full texts."
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "How many digests to show, default 20, max 100."
+                },
+                "digest_id": {
+                    "type": "integer",
+                    "description": "If set, return this single digest with its full text."
+                }
+            },
+            "required": []
+        }
+    },
+
+    "rss_feeds": {
+        "description": (
+            "Lists the configured news feeds with their health: ok / flaky / silent (no new items for weeks) / "
+            "dead (failing repeatedly), plus last item time and last error. Read-only."
+        ),
+        "function": rss_feeds,
+        "schema": {
+            "type": "object",
+            "properties": {},
+            "required": []
+        }
+    },
+
+    "rss_feeds_edit": {
+        "description": (
+            "Adds one news feed by URL — the URL is REALLY fetched and parsed before saving, so if it is not "
+            "a feed or the site blocks robots you get an explicit rejection, never a false 'added'. "
+            "Or removes one feed by id, exact URL or name fragment. "
+            "Full list replacement is manual work in the admin panel, not here."
+        ),
+        "function": rss_feeds_edit,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "add": {
+                    "type": "string",
+                    "description": "Feed URL to add (http/https). A website URL also works — its feed is discovered."
+                },
+                "remove": {
+                    "type": "string",
+                    "description": "Feed id, exact URL or a distinctive part of its name to delete."
+                },
+                "note": {
+                    "type": "string",
+                    "description": "Optional short label stored with the feed, e.g. 'RU, state-owned'."
                 }
             },
             "required": []

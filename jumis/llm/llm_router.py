@@ -102,6 +102,12 @@ class LLMWorker:
         # Модуль чистки истории (устанавливается в run_bot после создания)
         self.cleaner = None
 
+        # Модуль бэкапа БД (устанавливается в run_bot после создания)
+        self.backups = None
+
+        # Модуль мировых новостей (устанавливается в run_bot после создания)
+        self.rss = None
+
         self.admin_id = ADMIN_ID
 
 
@@ -404,6 +410,8 @@ class LLMWorker:
                 if 'scheduler' in sig.parameters: call_kwargs['scheduler'] = self.scheduler
                 if 'llm' in sig.parameters: call_kwargs['llm'] = self
                 if 'cleaner' in sig.parameters: call_kwargs['cleaner'] = self.cleaner
+                if 'backups' in sig.parameters: call_kwargs['backups'] = self.backups
+                if 'rss' in sig.parameters: call_kwargs['rss'] = self.rss
 
 
                 # Вызов в зависимости от типа функции (async/sync)
@@ -492,9 +500,15 @@ class LLMWorker:
             question: str = None,
             stream: bool = True,
             tools: list = None,
-            dialog: list = None
+            dialog: list = None,
+            timeout: float = None
         ):
-        """Чистый вызов LLM через LiteLLM с безопасным откатом и поддержкой стрима."""
+        """Чистый вызов LLM через LiteLLM с безопасным откатом и поддержкой стрима.
+
+        timeout — необязательный персональный лимит на этот вызов (по умолчанию
+        общий LLM_TIMEOUT). Нужен длинным задачам: сводка новостей генерируется
+        в разы дольше обычного ответа, а 30 секунд её обрывают.
+        """
 
         # 1. ВАЛИДАЦИЯ И ОТКАТ НА ВХОДЕ
         is_subagent = dialog is not None
@@ -528,6 +542,8 @@ class LLMWorker:
             self.current_model, len(temp_messages), len(tools or []), self.llm_temperature,
         )
 
+        request_timeout = timeout or self.llm_timeout
+
         # Единая температура для всех вызовов. None — параметр не передаётся.
         request_kwargs = {}
         if self.llm_temperature is not None:
@@ -542,7 +558,7 @@ class LLMWorker:
                         messages=temp_messages,
                         tools=tools,
                         stream=True,
-                        timeout=self.llm_timeout,
+                        timeout=request_timeout,
                         **request_kwargs,
                     )
 
@@ -554,10 +570,10 @@ class LLMWorker:
                         self.old_dialog = copy.deepcopy(self.dialog)
 
                 except (Timeout, asyncio.TimeoutError):
-                    logger.error("⏳ [LiteLLM] Таймаут ответа (30 сек). Запрос сброшен.")
+                    logger.error("⏳ [LiteLLM] Таймаут ответа модели (%.0f сек). Запрос сброшен.", request_timeout)
                     if not is_subagent and backup_dialog is not None:
                         self.dialog = copy.deepcopy(backup_dialog)
-                    yield self._make_stream_chunk("\n\n⏳ *[Ошибка: Таймаут ответа сети (30с). Попробуйте еще раз.]*")
+                    yield self._make_stream_chunk("\n\n⏳ *[Ошибка: Таймаут ответа сети. Попробуйте еще раз.]*")
 
                 except (json.JSONDecodeError, ValueError) as e:
                     logger.error(f"⚠️ [LiteLLM] Ошибка структуры JSON: {e}")
@@ -580,7 +596,7 @@ class LLMWorker:
                 messages=temp_messages,
                 tools=tools,
                 stream=False,
-                timeout=self.llm_timeout,
+                timeout=request_timeout,
                 **request_kwargs,
             )
             if not is_subagent:
@@ -668,7 +684,8 @@ class LLMWorker:
             self,
             system: str,
             dialog: list = None,
-            question: str = None
+            question: str = None,
+            timeout: float = None
         ) -> dict:
         """
         Простой запрос к LLM без вызова функций.
@@ -682,7 +699,8 @@ class LLMWorker:
             system=system,
             question=question,
             dialog=dialog,
-            stream=False
+            stream=False,
+            timeout=timeout,
         )
 
         message = response.choices[0].message

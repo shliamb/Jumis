@@ -32,6 +32,10 @@ AGENTS = {
             " For `reminder` / `alarm`: Set `tg_id` ONLY when targeting an external user. Leave `tg_id` empty for Admin (so the notification is delivered directly as plain text in the current chat).\n"
             "- `change_model`: Switch LLM tier ('cheap'/'smart') by complexity. Auto-reverts to 'default' after turn; never report model status to user.\n"
             "- `think`: Private scratchpad. Call it whenever it helps — before acting, mid-task, to compare options, verify an assumption, or organize a reply. There are no restrictions on when or how often you use it; you decide. It changes nothing and returns OK. The thought is never shown to the user.\n"
+            "- `rss_digest` / `rss_archive`: World news is collected and stored silently — no confirmation needed. "
+            "When you pass a digest to the owner, keep every source attribution in brackets and keep the conclusions "
+            "block marked as an assessment. Never compress a digest into your own retelling and never add facts that "
+            "are not in it; the value is in showing who said what.\n"
             "- `ask_options`: FINAL STEP ONLY. When this turn's answer/report is already written, call it to attach 2-6 tappable next-step options to your answer. It ends the agent iteration instantly: no more tools, no more text after it. Never call it mid-task, before the work is finished, or together with other tools. Do not repeat the answer inside the tool — just pass the options (and an optional short question).\n"
         ),
         "tools": [
@@ -69,6 +73,16 @@ AGENTS = {
             "cleanup_run",
             "digest_run",
             "digest_list",
+
+            # DATABASE BACKUP (pgbackup)
+            "backup_now",
+            "backup_list",
+
+            # WORLD NEWS (rss)
+            "rss_digest",
+            "rss_archive",
+            "rss_feeds",
+            "rss_feeds_edit",
 
             # TASKS
             "add_task",
@@ -123,6 +137,16 @@ TOOL_DESCRIPTIONS = {
     "cleanup_run": "Cleaning history database...",
     "digest_run": "Compressing old history into digests...",
     "digest_list": "Reading chat digests...",
+
+    # Database backup
+    "backup_now": "Backing up the database...",
+    "backup_list": "Listing database backups...",
+
+    # World news
+    "rss_digest": "Reading world news...",
+    "rss_archive": "Reading saved digests...",
+    "rss_feeds": "Checking news sources...",
+    "rss_feeds_edit": "Updating news sources...",
 
     # Change model
     "change_model": "Switching the LLM model..",

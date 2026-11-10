@@ -4,6 +4,20 @@ from logs.set_logger import logger
 from database import db
 
 
+# Колонки scheduled_tasks, которые можно писать из кода и из инструментов агента.
+# Ключи словарей динамические, поэтому имя колонки в SQL берётся только отсюда.
+TASK_COLUMNS = frozenset({
+    "tg_id", "task_type", "title", "agent_instruction",
+    "scheduled_at", "cron_expression", "status",
+    "repeat_interval_minutes", "requires_ack", "is_ack_received",
+    "max_nag_attempts", "current_nag_count",
+})
+
+# При вставке из JSON-бэкапа сохраняем и штампы времени — иначе восстановленные
+# задачи получат время создания «сейчас». Агент эти поля не передаёт.
+TASK_INSERT_COLUMNS = TASK_COLUMNS | {"created_at", "updated_at"}
+
+
 
 class DBTasks:
 
@@ -27,8 +41,16 @@ class DBTasks:
             logger.error("add_task: task_data is empty or invalid.")
             return None
 
-        keys = list(task_data.keys())
-        values = list(task_data.values())
+        # Только известные колонки: ключи приходят из инструмента агента и из JSON-бэкапа
+        clean = {k: v for k, v in task_data.items() if k in TASK_INSERT_COLUMNS}
+        for key in set(task_data) - set(clean):
+            logger.warning("add_task: неизвестное поле '%s' отброшено.", key)
+        if not clean:
+            logger.error("add_task: не осталось допустимых полей для вставки.")
+            return None
+
+        keys = list(clean.keys())
+        values = list(clean.values())
         
         columns = ", ".join(keys)
         placeholders = ", ".join([f"${i+1}" for i in range(len(values))])
@@ -68,14 +90,21 @@ class DBTasks:
             logger.warning(f"db_update_task: No fields to update for task {id_task}.")
             return False
 
-        # 3. Собираем динамический SET
+        # 3. Собираем динамический SET (только известные колонки)
         set_parts = []
         values = []
         
         for key, val in data.items():
+            if key not in TASK_COLUMNS:
+                logger.warning("db_update_task: неизвестное поле '%s' отброшено.", key)
+                continue
             param_idx = len(values) + 1
             set_parts.append(f"{key} = ${param_idx}")
             values.append(val)
+
+        if not set_parts:
+            logger.error("db_update_task: нет допустимых полей для задачи %s: %s", id_task, sorted(data))
+            return False
 
         # Автоматически обновляем updated_at
         set_parts.append("updated_at = NOW()")

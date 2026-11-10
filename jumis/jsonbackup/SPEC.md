@@ -26,8 +26,11 @@
 2. Категории берутся из кэшей `db_users.users_categories` / `db_memory.fact_categories`, остальные — через `get_all_*`/`get_users`/`get_tasks`.
 3. `save_json_files`: список режется по `max_records_per_file` (500 / 1000), каждый чанк — отдельный файл, `indent=4`, `ensure_ascii=False`.
 4. `_push_files`: `send_document` на каждый файл с паузой 0.7 с (защита от flood).
-5. `restore_table_from_file`: чтение JSON → диспетчер `save_handlers` (методы репозиториев) → построчная вставка → подсчёт успехов/ошибок.
+5. `restore_table_from_file`: чтение JSON → диспетчер `save_handlers` (`db_users.add_category`, `db_memory.add_category`, `db_users.add_user`, `db_memory.add_fact`, `db_messages.add_message`, `db_tasks.db_add_task`) → построчная вставка → подсчёт успехов/ошибок.
 6. Восстановление идёт по одному файлу за команду (`/up_*`), ручной выбор таблицы.
+7. Время: `_json_serializer` переводит aware-datetime (asyncpg отдаёт `TIMESTAMPTZ` в UTC) в настенное время `TIME_ZONE` — иначе при восстановлении штампы уезжают на смещение пояса. Naive-datetime (`TIMESTAMP`, например `scheduled_at`) пишется как есть.
+8. `_prepare_for_db` — обратное преобразование: `id` выбрасывается (SERIAL/BIGSERIAL создаётся заново), строки `*_at`/`*_date`/`due_*` парсятся; значение со смещением приводится к `TIME_ZONE`, без смещения считается уже настенным временем приложения (совместимо со старыми файлами, где был `+00:00`).
+9. `db_add_task` восстанавливает и `created_at`/`updated_at` (вставка их разрешает), поэтому у восстановленных задач не подменяется время создания.
 
 ## Обработка ошибок
 
@@ -35,6 +38,5 @@
 - Ошибка записи/отправки файла → лог, `success = False`, остальные файлы продолжают отправляться.
 - Файл не найден/не читается/структура не список → `(False, 0, 0)`.
 - Неизвестный `name_action` → `(False, 0, 0)`.
-- Для `06_tasks` обработчик ищется как `db_tasks.add_task`, но в `DBTasks` метод называется `db_add_task` → импорт задач фактически не работает (`(False, 0, 0)`). При починке — использовать `db_add_task`.
 - Ошибка вставки строки → `bad_count += 1`, лог, импорт продолжается.
 - Битые даты при восстановлении остаются строкой (ValueError перехватывается).

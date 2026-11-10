@@ -58,6 +58,14 @@ async def admin_menu(message: types.Message):
         "├ /digest_now — Сжать историю",
         "└ /digests — Дайджесты",
         "",
+        "<b>📰 НОВОСТИ МИРА (RSS):</b>",
+        "└ /rss — Источники и сводка",
+        "",
+        "<b>💾 БЭКАП БД (pg_dump):</b>",
+        "├ /backup — Копии и запуск",
+        "├ /backup_now — Сделать копию",
+        "└ /backups — Только список",
+        "",
         "<b>📤 БЭКАП (БД ➔ JSON):</b>",
         "├ /crTabDb — Создать таблицы",
         "└ /dowjson — Скачать JSON",
@@ -94,6 +102,14 @@ async def admin_menu(message: types.Message):
         "├ /cleanup_run — Clean now",
         "├ /digest_now — Compress history",
         "└ /digests — Digests",
+        "",
+        "<b>📰 WORLD NEWS (RSS):</b>",
+        "└ /rss — Sources & digest",
+        "",
+        "<b>💾 DB BACKUP (pg_dump):</b>",
+        "├ /backup — Copies & run",
+        "├ /backup_now — Create a copy",
+        "└ /backups — List only",
         "",
         "<b>📤 BACKUP (DB ➔ JSON):</b>",
         "├ /crTabDb — Init tables",
@@ -494,7 +510,10 @@ async def create_tebles_in_db_admin(message: types.Message):
     user_id = message.from_user.id
     if not await rights_verification(user_id, lang, message): return
 
-    if create_tables_in_db(): # Синхронная
+    # psycopg2 синхронный: в отдельном потоке, чтобы не вешать event loop бота
+    created = await asyncio.to_thread(create_tables_in_db)
+
+    if created:
         if lang == "ru": await message.answer("🎉 Таблицы в базе данных были успешно созданы")
         else: await message.answer("🎉 Tables in the DB were created successfully")
     else:
