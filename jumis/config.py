@@ -1,6 +1,10 @@
 import os
 from dotenv import load_dotenv
 
+# Читаем .env до любых вычислений: ниже от окружения зависит, например, путь
+# к файлу сессии (в Docker его монтируют отдельным томом).
+load_dotenv()
+
 
 # =====================================================================
 # TIMEZONE & TIME MANAGEMENT ARCHITECTURE / АРХИТЕКТУРА ВРЕМЕНИ
@@ -46,6 +50,21 @@ LOG_BACKUP_COUNT = 5
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PATH_LOGS = "/jumis/logs/files" if DOCKER else os.path.join(BASE_DIR, "jumis", "logs", "files")
+
+# Путь к сессии Telethon — ТОЛЬКО абсолютный, один на всю систему.
+# Раньше был относительный 'session_jumis', и файл создавался в текущей папке:
+# от корня — один, из jumis/ — другой. Отсюда две копии и риск тихо войти не той
+# сессией. Переопределяется `SESSION_PATH` из окружения (нужно в Docker, где
+# сессию монтируют отдельным томом и забирают обратно при остановке).
+PATH_SESSION = (os.environ.get("SESSION_PATH") or "").strip() or os.path.join(
+    BASE_DIR, "session_jumis.session"
+)
+
+# Догонять ли сообщения, пропущенные пока бот был выключен (catch_up в Telethon).
+# По умолчанию выключено: Telethon заново отдаёт старые апдейты, а дайджест их
+# уже удалял — история может «воскреснуть» дублем. Включать осознанно.
+TELETHON_CATCH_UP = False
+
 # PATH_LOGS = "/logs/" if DOCKER else "../logs/"
 DOWNLOAD = "/jumis/downloads/" if DOCKER else "jumis/downloads"
 PATH_JSON = "/jumis/json/" if DOCKER else "jumis/json"
@@ -77,7 +96,25 @@ USE_RICH_MESSAGES = True
 
 #### KEYS: ####
 
-load_dotenv()
+# `.env` уже прочитан в начале файла (см. load_dotenv() выше): от него зависит
+# и PATH_SESSION. Здесь только разбор значений.
+
+
+def _env_int(name: str):
+    """int из окружения без падения на старте: нет значения или мусор → None.
+
+    Раньше `int(os.environ.get(...))` ронял импорт config.py, то есть бот не
+    поднимался вообще и сказать владельцу «в .env нет api_id» было некому.
+    """
+    raw = os.environ.get(name)
+    if raw is None or not str(raw).strip():
+        return None
+    try:
+        return int(str(raw).strip())
+    except (TypeError, ValueError):
+        return None
+
+
 # LOGGING (после load_dotenv, чтобы можно было переопределить из .env):
 LOG_LEVEL = os.environ.get('LOG_LEVEL', 'INFO').upper()
 # DATABASE:
@@ -86,7 +123,8 @@ PASSWORD_DB = os.environ.get('PASSWORD_DB')
 DB_NAME = os.environ.get('POSTGRES_DB')
 # TELEGRAM:
 TELEGRAM_BOT_TOKEN = os.environ.get('telegram_bot_token')
-ADMIN_ID = int(os.environ.get('admin_id'))
-API_ID = int(os.environ.get('api_id'))
-API_HASH = str(os.environ.get('api_hash'))
+ADMIN_ID = _env_int('admin_id') or 0
+API_ID = _env_int('api_id')
+# str(os.environ.get(...)) превращал отсутствие ключа в строку "None"
+API_HASH = (os.environ.get('api_hash') or '').strip() or None
 

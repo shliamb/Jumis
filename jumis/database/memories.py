@@ -26,6 +26,46 @@ class DBMemories():
         self.fact_categories = [dict(rec) for rec in records] if records else []
 
 
+    async def get_prompt_sections(self) -> list[dict]:
+        """Разделы, которые рендерятся в системный промпт (правила, стили, паспорт)."""
+        query = """
+            SELECT name, description, prompt_title, prompt_order
+            FROM facts_categories
+            WHERE in_prompt = TRUE
+            ORDER BY prompt_order ASC, id ASC;
+        """
+        records = await self.db.fetch(query)
+        return [dict(rec) for rec in records] if records else []
+
+
+    async def get_section_facts(self, category: str) -> list[dict]:
+        """Живые факты одного раздела — в порядке добавления (новые в конце)."""
+        query = """
+            SELECT id, content, updated_at
+            FROM memories
+            WHERE category = $1 AND memory_status = 'live'
+            ORDER BY id ASC;
+        """
+        records = await self.db.fetch(query, category)
+        return [dict(rec) for rec in records] if records else []
+
+
+    async def get_map_rows(self) -> list[dict]:
+        """Полки архива: категории без рендера в промпт + число живых фактов."""
+        query = """
+            SELECT c.name,
+                   c.description,
+                   count(m.id) FILTER (WHERE m.memory_status = 'live') AS facts
+            FROM facts_categories c
+            LEFT JOIN memories m ON m.category = c.name
+            WHERE c.in_prompt = FALSE
+            GROUP BY c.name, c.description
+            ORDER BY facts DESC, c.name ASC;
+        """
+        records = await self.db.fetch(query)
+        return [dict(rec) for rec in records] if records else []
+
+
     async def add_category(self, category_data: dict) -> bool:
         """Добавление или обновление категории из словаря"""
 
@@ -134,16 +174,30 @@ class DBMemories():
             tg_id: int = None, 
             category: str = None, 
             limit: int = 10,
-            min_similarity: float = 0.75  # <-- ПОРОГ КАЧЕСТВА (0.0 - 1.0)
+            min_similarity: float = 0.75,  # <-- ПОРОГ КАЧЕСТВА (0.0 - 1.0)
+            include_sections: bool = True
         ) -> list[dict]:
-            """Универсальный векторный поиск с порогом отсечения шума"""
+            """Универсальный векторный поиск с порогом отсечения шума.
+
+            Устаревшие факты (`memory_status <> 'live'`) не возвращаются никогда:
+            они остаются в базе как история, но не мешают текущим ответам.
+            include_sections=False — не искать в разделах, которые и так в промпте.
+            """
             emb_str = str(embedding)
             
             # 1. Формируем условия фильтрации
-            conditions = ["(1 - (embedding <=> $1::vector)) >= $2"]  # $2 — min_similarity
+            conditions = [
+                "(1 - (embedding <=> $1::vector)) >= $2",  # $2 — min_similarity
+                "memory_status = 'live'",
+            ]
             params = [emb_str, min_similarity]
             
             param_idx = 3
+
+            if not include_sections:
+                conditions.append(
+                    "category NOT IN (SELECT name FROM facts_categories WHERE in_prompt = TRUE)"
+                )
             
             if tg_id is not None:
                 conditions.append(f"tg_id = ${param_idx}")
@@ -170,6 +224,89 @@ class DBMemories():
             
             records = await self.db.fetch(query, *params)
             return [dict(rec) for rec in records] if records else []
+
+
+    async def get_facts_by_ids(self, fact_ids: list[int]) -> list[dict]:
+        """Факты по списку id (для уборки: что именно склеиваем)."""
+        if not fact_ids:
+            return []
+        query = """
+            SELECT id, content, category, tg_id, created_at
+            FROM memories
+            WHERE id = ANY($1::bigint[])
+            ORDER BY id ASC;
+        """
+        records = await self.db.fetch(query, list(fact_ids))
+        return [dict(rec) for rec in records] if records else []
+
+
+    async def fetch_relative_dated(self, days: int) -> list[dict]:
+        """Живые факты старше N дней — кандидаты в архив (гниющие «сегодня/завтра»)."""
+        query = """
+            SELECT id, content, category, created_at
+            FROM memories
+            WHERE memory_status = 'live'
+              AND created_at < NOW() - make_interval(days => $1)
+            ORDER BY id ASC;
+        """
+        records = await self.db.fetch(query, int(days))
+        return [dict(rec) for rec in records] if records else []
+
+
+    async def find_similar_pairs(self, min_similarity: float = 0.92) -> list[dict]:
+        """Пары живых фактов, которые почти одно и то же (для уборки памяти).
+
+        Полный self-join по векторам: при 300–500 фактах это дешёвый запрос,
+        а HNSW для поиска пар «a < b» не помогает.
+        """
+        query = """
+            SELECT a.id AS left_id,
+                   b.id AS right_id,
+                   (1 - (a.embedding <=> b.embedding)) AS similarity
+            FROM memories a
+            JOIN memories b ON a.id < b.id
+            WHERE a.memory_status = 'live'
+              AND b.memory_status = 'live'
+              AND a.embedding IS NOT NULL
+              AND b.embedding IS NOT NULL
+              AND (1 - (a.embedding <=> b.embedding)) >= $1
+            ORDER BY similarity DESC;
+        """
+        records = await self.db.fetch(query, min_similarity)
+        return [dict(rec) for rec in records] if records else []
+
+
+    async def mark_superseded(self, fact_ids: list[int], target_id: int | None, status: str = "superseded") -> int:
+        """Помечает факты устаревшими. Ничего не удаляет — данные остаются в базе."""
+        if not fact_ids:
+            return 0
+
+        query = """
+            UPDATE memories
+            SET memory_status = $2,
+                superseded_by = $3,
+                updated_at = NOW()
+            WHERE id = ANY($1::bigint[])
+              AND memory_status <> $2
+        """
+        result = await self.db.execute(query, list(fact_ids), status, target_id)
+        # asyncpg: "UPDATE 12"
+        try:
+            return int(result.split()[1]) if result and result.startswith("UPDATE") else 0
+        except (IndexError, ValueError):
+            return 0
+
+
+    async def live_stats(self) -> dict:
+        """Сколько памяти живёт сейчас и сколько отложено в историю."""
+        query = """
+            SELECT count(*) FILTER (WHERE memory_status = 'live') AS live,
+                   count(*) FILTER (WHERE memory_status <> 'live') AS archived,
+                   count(*) AS total
+            FROM memories;
+        """
+        row = await self.db.fetchrow(query)
+        return dict(row) if row else {"live": 0, "archived": 0, "total": 0}
 
 
 

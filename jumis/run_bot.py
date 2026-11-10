@@ -29,10 +29,12 @@ from database import db
 from handlers.dispatcher import dp
 
 from telethoner.worker_telethon import myTelethon
+from telethoner.notify import UserbotNotifier
 from ingest.worker import IngestionWorker
 from cleaner import Cleaner
 from pgbackup import Backups
 from rss import RssNews
+from memory import Memory
 
 
 
@@ -130,6 +132,7 @@ async def main_bot() -> None:
     mytelethon = myTelethon(
         queue_messages
     )
+    dp["mytelethon"] = mytelethon  # /admin и /login показывают его состояние
 
     # Инициализация LLM Воркера и передача в aiogram workflow_data
     llm = LLMWorker(
@@ -143,6 +146,12 @@ async def main_bot() -> None:
     )
     dp["llm"] = llm  # Доступен во всех хэндлерах через `llm` или контекст
 
+    # Модуль памяти: разделы правил/стилей/паспорта, карта архива, подхват.
+    # Блоки собираются из БД на каждый запрос — правка видна сразу.
+    memory = Memory(db_memory=db_memory, llm=llm)
+    llm.memory = memory
+    dp["memory"] = memory
+
     # Модуль чистки истории: уборка мусора, ночная самаризация, системный крон
     cleaner = Cleaner(
         db=db,
@@ -151,6 +160,7 @@ async def main_bot() -> None:
         llm=llm,
         scheduler=scheduler,
     )
+    cleaner.memory = memory  # ночная уборка дублей памяти идёт тем же кроном
     llm.cleaner = cleaner
     dp["cleaner"] = cleaner
     await cleaner.ensure_schema()
@@ -210,6 +220,18 @@ async def main_bot() -> None:
     # Внутренний язык владельца (ru/en) — подписи кнопок и стартовое приветствие
     lang_admin = await get_admin_lang(db_users)
 
+    # Уведомления о состоянии userbot: одно сообщение на смену состояния
+    # (нет сессии / Telegram отозвал / файл занят) и напоминание раз в сутки,
+    # пока вход не восстановлен.
+    notifier = UserbotNotifier(
+        bot=dp.bot,
+        admin_id=ADMIN_ID,
+        lang=lang_admin,
+        state_provider=lambda: mytelethon.auth.state,
+    )
+    mytelethon.on_state_change = notifier.on_state_change
+    dp["userbot_notifier"] = notifier
+
     jumis_agent = JumisAgent(
         bot=dp.bot,
         llm=llm,
@@ -240,6 +262,10 @@ async def main_bot() -> None:
 
         # То же для ночного бэкапа.
         await backups.ensure_system_task()
+
+        # Напоминания о неподключённом userbot (первое сообщение придёт само,
+        # когда `run()` определит состояние сессии).
+        await notifier.start()
 
         while True:
             # Запускаем приветствие как неблокирующую фоновую задачу
@@ -291,6 +317,9 @@ async def main_bot() -> None:
 
     finally:
         logger.info("Shutting down: closing Telethon, bot session, DB, scheduler")
+
+        # 0. Гасим напоминания, пока сессия бота ещё открыта
+        await notifier.stop()
 
         # 1. Отключаем клиент Telethon
         await mytelethon.stop() # или await mytelethon.client.disconnect()

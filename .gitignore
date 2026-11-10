@@ -7,6 +7,7 @@ test.py
 jumis/test.py
 session_jumis.session
 session_jumis.session-journal
+*.session.old
 models_cache/huggingface
 models_cache/torch
 models_cache/embeddings

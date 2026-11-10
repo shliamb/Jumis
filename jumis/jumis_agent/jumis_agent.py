@@ -657,6 +657,18 @@ class JumisAgent:
             try:
                 self.agent_busy = True
                 system, tools = await self.llm.get_tools("jumis_agent")
+
+                # Подхват памяти: несколько фактов, возможно относящихся к
+                # этому сообщению. Это дешевле и надёжнее, чем надеяться, что
+                # агент сам догадается вызвать search_facts.
+                if self.llm.memory:
+                    try:
+                        recall = await self.llm.memory.recall(prompt_text)
+                    except Exception as e:
+                        recall = ""
+                        logger.warning("Memory recall failed: %s", e)
+                    if recall:
+                        system = f"{system.rstrip()}\n\n{recall}"
                 
                 # Отправляем начальную плашку в чат
                 msg = await self.bot.send_message(chat_id, "...")

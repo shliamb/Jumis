@@ -184,8 +184,13 @@ async def background_vectorize_fact(fact_id: int, content: str, db_memory):
 
 
     
-async def write_fact(content: str, facts_category: str, tg_id: int = None, db_memory = None) -> str:
-    """Сохраняет факт в БД и фоново запускает векторизацию."""
+async def write_fact(content: str, facts_category: str, tg_id: int = None, db_memory = None, memory = None) -> str:
+    """Сохраняет факт в БД, но сначала проверяет, нет ли уже похожего.
+
+    Защита от лавины дублей: при сходстве выше порога факт НЕ пишется, а
+    возвращается id существующего и указание править его через `update_fact`.
+    Вектор считается один раз: и для проверки, и для записи.
+    """
     if not db_memory:
         return "Error: Memory service is not available."
 
@@ -193,6 +198,36 @@ async def write_fact(content: str, facts_category: str, tg_id: int = None, db_me
         clean_content = content.strip()
         if not clean_content:
             return "Error: Fact content cannot be empty."
+
+        # 1. Вектор: он нужен и для проверки дублей, и для самой записи.
+        embedding = None
+        if embedder:
+            try:
+                embedding = await embedder.get_embedding(clean_content)
+            except Exception as e:
+                logger.error("[write_fact] Ошибка получения эмбеддинга: %s", e)
+                embedding = None
+        else:
+            logger.warning("[write_fact] Embedder не передан.")
+
+        # 2. Похожий факт уже есть — не плодим копию, отдаём id для update_fact.
+        if memory and embedding:
+            similar = await memory.similar(embedding=embedding)
+            similar = [f for f in similar if (f.get("content") or "").strip()]
+            if similar:
+                best = similar[0]
+                try:
+                    score = float(best.get("similarity") or 0)
+                except (TypeError, ValueError):
+                    score = 0.0
+                preview = " ".join(str(best["content"]).split())[:220]
+                logger.info("[write_fact] Дубль не сохранён: похоже на #%s (%.3f)", best.get("id"), score)
+                return (
+                    f"NOT SAVED: a similar fact already exists — #{best.get('id')} "
+                    f"[{best.get('category')}]: «{preview}» (similarity {score:.2f}).\n"
+                    f"If this is a refinement or a replacement — call update_fact(id={best.get('id')}, content=...).\n"
+                    f"If it is genuinely a new fact — add what makes it different and call write_fact again."
+                )
 
         fact_data = {
             "content": clean_content,
@@ -203,14 +238,18 @@ async def write_fact(content: str, facts_category: str, tg_id: int = None, db_me
         if tg_id is not None and tg_id != 0:
             fact_data["tg_id"] = tg_id
 
-        # 1. Быстро сохраняем факт в БД без вектора
+        # 3. Вектор есть — пишем сразу с ним, без фоновой задачи.
+        if embedding:
+            fact_data["embedding"] = embedding
+
         fact_id = await db_memory.add_fact(fact_data)
 
         if fact_id:
-            # 2. Регистрируем фоновую задачу в множестве, чтобы GC её не уничтожил
-            task = asyncio.create_task(background_vectorize_fact(fact_id, clean_content, db_memory))
-            background_tasks.add(task)
-            task.add_done_callback(background_tasks.discard)
+            # 4. Вектор не получился — досчитаем в фоне (факт всё равно не теряется).
+            if not embedding:
+                task = asyncio.create_task(background_vectorize_fact(fact_id, clean_content, db_memory))
+                background_tasks.add(task)
+                task.add_done_callback(background_tasks.discard)
 
             return f"Fact successfully written to memory (ID: {fact_id})."
         else:
@@ -233,10 +272,12 @@ async def search_facts(
     if not db_memory:
         return "Error: Memory service is not available."
 
-
+    # Запрос кодируем как query (у e5 префиксы query/passage разные) —
+    # факты в базе лежат как passage.
+    embedding_query = None
     if embedder:
         try:
-            embedding_query = await embedder.get_embedding(query)
+            embedding_query = await embedder.get_embedding(query, is_query=True)
         except Exception as e:
             logger.error("[search_facts] Ошибка получения эмбеддинга: %s", e)
     else:

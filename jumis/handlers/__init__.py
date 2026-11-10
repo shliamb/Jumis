@@ -8,6 +8,7 @@ from handlers.inbox import router as inbox_menu
 from handlers.cleaner import router as cleaner_menu
 from handlers.backup import router as backup_menu
 from handlers.rss_menu import router as rss_menu
+from handlers.login import router as login_menu
 
 
 
@@ -20,5 +21,6 @@ ALL_ROUTERS = [
     cleaner_menu,
     backup_menu,
     rss_menu,
+    login_menu,
     handle_message
 ]

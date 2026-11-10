@@ -5,7 +5,8 @@
 Aiogram-слой Telegram-бота (второй интерфейс, рядом с userbot):
 
 - `start.py` — `/start`: проверка прав, защита от ботов, регистрация единственного админа.
-- `admin.py` — `/admin` и сервисные команды: логи, модели, рестарт, создание/удаление таблиц, JSON-бэкап и импорт.
+- `admin.py` — `/admin` и сервисные команды: логи, модели, рестарт, создание/удаление таблиц, JSON-бэкап и импорт; в меню первой строкой — состояние юзербота.
+- `login.py` — вход в Telegram для userbot: `/login`, кнопки «по QR» / «по коду», шаги телефона, кода и пароля 2FA; код и пароль удаляются из чата сразу после прочтения.
 - `get_message.py` — fallback-роутер: любое разрешённое сообщение уходит в `JumisAgent`.
 - `options.py` — callback-роутер кнопок-вариантов `ask_options` (`opt:<token>`): выбор становится следующим сообщением агента.
 - `inbox.py` — callback-роутер кнопки «Очистить» под виджетом входящих (`inbox:clear`): снимает очередь и удаляет виджет **без запуска агента**.
@@ -22,7 +23,7 @@ Aiogram-слой Telegram-бота (второй интерфейс, рядом 
 - `aiogram.types.CallbackQuery` с `data = "opt:<token>"` — нажатие на вариант ответа `ask_options`.
 - `aiogram.types.CallbackQuery` с `data = "inbox:clear"` — нажатие кнопки «Очистить» под виджетом входящих (кнопку рисует `JumisAgent._inbox_keyboard`).
 - Внедряемые зависимости: `db_users`, `llm`, `json_back`, `jumis_agent`, `bot` (из `dp` workflow data).
-- Команды: `/start`, `/admin`, `/logs`, `/dLogs`, `/reset`, `/uplLLM`, `/getMod`, `/setMod`, `/crTabDb`, `/dowjson`, `/up_users_cat`, `/up_facts_cat`, `/up_users`, `/up_facts`, `/up_messages`, `/up_tasks`, `/allDel`, `/cancel`, `/cleanup`, `/cleanup_run`, `/digest_now`, `/digests`, `/backup`, `/backup_now`, `/backups`.
+- Команды: `/start`, `/admin`, `/login`, `/login_cancel`, `/logs`, `/dLogs`, `/reset`, `/uplLLM`, `/getMod`, `/setMod`, `/crTabDb`, `/dowjson`, `/up_users_cat`, `/up_facts_cat`, `/up_users`, `/up_facts`, `/up_messages`, `/up_tasks`, `/allDel`, `/cancel`, `/cleanup`, `/cleanup_run`, `/digest_now`, `/digests`, `/backup`, `/backup_now`, `/backups`.
 - Внедряемые зависимости `cleaner` (из `dp["cleaner"]`) и `backups` (из `dp["backups"]`).
 - `CallbackQuery` `data = "clean:run"` / `"clean:cancel"` — подтверждение уборки.
 - Для импорта — прикреплённый `.json` файл.
@@ -30,6 +31,10 @@ Aiogram-слой Telegram-бота (второй интерфейс, рядом 
 - `CallbackQuery` `data = "rss:digest"` / `"rss:check"` / `"rss:edit"` — кнопки под списком источников.
 - `F.text` в состоянии FSM `RssStates.waiting_list` — новый список фидов построчно (`URL` или `URL | заметка`).
 - Внедряемая зависимость `rss` (из `dp["rss"]`).
+
+- `CallbackQuery` `data = "login:start"` / `"login:qr"` / `"login:code"` / `"login:sms"` / `"login:status"` / `"login:cancel"` — мастер входа в Telegram; кнопку `login:start` рисует и уведомление `telethoner.notify`.
+- `F.text` в состояниях FSM `LoginStates.phone` / `.code` / `.password` — номер телефона, код из Telegram/SMS, пароль 2FA; слово «отмена»/«cancel» работает как отмена.
+- Внедряемая зависимость `mytelethon` (из `dp["mytelethon"]`): `health()`, `whoami()`, `auth.start_qr()/wait_qr()/send_code()/verify_code()/verify_password()/cancel()`.
 
 ## Выходные данные
 
@@ -50,13 +55,19 @@ Aiogram-слой Telegram-бота (второй интерфейс, рядом 
 - `rss:check`: `rss.check_all()` → отчёт «живых N из M» и подсказка, как убрать мёртвые.
 - `rss:edit` → FSM `RssStates.waiting_list` → `rss.replace_from_text(text)` → отчёт «принято N / отклонено M» с причинами, затем обновлённый список.
 
+- `/login`: меню со статусом сессии и кнопками «📷 Войти по QR» / «🔢 Войти по коду» / «🔄 Проверить статус».
+- `login:qr`: сообщение с кнопкой-ссылкой `tg://login?token=…`; то же сообщение переписывается каждые ~18 с, пока владелец не подтвердит вход; успех — «✅ Userbot подключён» с именем и id.
+- `login:code`: «шаг 1 из 2 — номер» → «шаг 2 из 2 — код» (текст зависит от того, куда Telegram его отправил: приложение, SMS, звонок) → при 2FA «пароль»; 3 попытки кода и 3 попытки пароля.
+- Сообщения с кодом и паролем удаляются из чата сразу после прочтения; после успешного входа бот пишет, кто подключён.
+- `/admin`: в шапке меню строка состояния юзербота (`state_label`: работает / нет сессии / отозвана / нет ключей / нет связи / файл занят).
+
 ## Логика (Вариации)
 
-1. Порядок роутеров: `start` → `admin` → `options` → `inbox` → `cleaner` → `backup` → `rss` → `get_message`; первый совпавший обрабатывает событие. `rss` стоит до fallback-роутера, иначе текст нового списка фидов улетел бы в агента.
+1. Порядок роутеров: `start` → `admin` → `options` → `inbox` → `cleaner` → `backup` → `rss` → `login` → `get_message`; первый совпавший обрабатывает событие. `rss` стоит до fallback-роутера, иначе текст нового списка фидов улетел бы в агента; `login` — по той же причине (телефон, код и пароль 2FA не должны попасть в агента).
 1a. `/rss` и `rss:*`: проверка `rights_verification` для команды, `from_user.id == ADMIN_ID` для кнопок (иначе alert «Нет доступа»). `rss:edit` ставит FSM `RssStates.waiting_list`; обработчик текста проверяет `ADMIN_ID`, сразу снимает состояние и работает только с текстом. Тост «Собираю сводку...» показывается до начала работы, потому что сбор занимает секунды.
 2. `rights_verification`: только `message.chat.type == "private"` и `user_id == ADMIN_ID`; иначе отказ (ru/en) и запись в лог.
 3. `/start`: `typing` → права → отказ ботам → `db_users.chek_tg_id` (INSERT ... ON CONFLICT) → сообщение «уже зарегистрирован» или создание записи `is_admin=True`; факт регистрации пишется в лог.
-4. `/admin`: статическое меню команд (включая `/logs` и `/dLogs`).
+4. `/admin`: статическое меню команд (включая `/logs` и `/dLogs`); состояние юзербота берётся из `mytelethon.health()["state"]` и переводится `state_label` на язык пользователя.
 5. `/setMod`: FSM `SetModelStates.waiting_for_model`; ввод проверяется по `llm.available_models` без учёта регистра, затем `db_users.db_update_user` + `llm.refresh_llm_models()`.
 6. Импорт: FSM `RestoreState.waiting_file`, `name_action` из команды (01…06), файл скачивается в `DOWNLOAD`, вызывается `json_back.restore_table_from_file`, файл удаляется.
 7. `/logs` отдаёт все непустые файлы из `PATH_LOGS` (основной `jumis.log` и ротации) как `*_utf8.txt` (перекодировка в UTF-8). `/dLogs` фиксирует факт очистки в логе, затем вызывает `logs.set_logger.clear_logs()`: активный файл очищается через `flush → truncate → seek(0)`, остальные файлы обнуляются; после команды `jumis.log` пуст (0 байт), в ответ уходит количество очищенных файлов.
@@ -70,6 +81,11 @@ Aiogram-слой Telegram-бота (второй интерфейс, рядом 
 15. `/crTabDb`: `create_tables_in_db()` (psycopg2, блокирующий) вызывается через `asyncio.to_thread` — создание таблиц не вешает event loop; сообщение «созданы/ошибка». Создаёт все таблицы, включая `chat_digests`, и векторные индексы.
 16. `/backup`: список копий + кнопка; `backup:run` (проверка `ADMIN_ID`) → `backups.create()` → отчёт (файл, размер, время, сколько старых удалено) редактированием сообщения; `/backup_now` — то же без кнопки, `/backups` — только список.
 15. `/digests [chat_id]`: до 5 дайджестов, каждый — ID, чат, период, число сообщений и первые 600 символов сводки.
+17. `/login` и `login:*`: проверка прав (`rights_verification` для команды, `from_user.id == ADMIN_ID` для кнопок); перед любым новым шагом останавливается активный QR-цикл (`_stop_qr`), иначе он держит блокировку входа в машине.
+18. `login:qr`: `auth.start_qr()` → кнопка `url="tg://login?token=…"` (Bot API разрешает `tg://` только в кнопках, не в тексте); задача `_qr_loop` ждёт `wait_qr(18)`, при истечении токена берёт новый и **переписывает то же сообщение**; при 2FA ставит `LoginStates.password`; `login:cancel` снимает задачу и состояние. Задача снимается из `_qr_tasks[chat_id]` в `finally`.
+19. `login:code`: `LoginStates.phone` → `auth.send_code(номер)` (номер спрашивается каждый раз: в БД он лежит не всегда и может быть другим) → `LoginStates.code` с текстом «где искать код» по типу доставки → `login:sms` повторяет запрос с `force_sms=True` → `LoginStates.password` при 2FA. Нормализация номера — в машине (`+7900…`, ведущая `8` → `+7`).
+20. Чувствительное: сообщение с кодом и паролем удаляется (`message.delete()`) сразу после прочтения, до любого следующего сообщения; в лог не пишутся ни номер, ни код, ни пароль. Владелец всегда видит, куда Telegram отправил код («в приложение», «SMS», «звонок»).
+21. `login:status` перепроверяет сессию (`auth.check(ignore_flow=True)`) — полезно, если вход сделали снаружи через `create_session.py`.
 
 ## Обработка ошибок
 
@@ -87,3 +103,10 @@ Aiogram-слой Telegram-бота (второй интерфейс, рядом 
 - `/rss*`: без `rss` в `dp` → «модуль новостей недоступен»; `busy` (сводка уже собирается) → «⏳ Сводка уже собирается»; неудачный сбор → текст причины + перечень не ответивших фидов; чужой пользователь на кнопке → alert + запись в лог.
 - `rss:edit` без текста (стикер, фото) — обработчик не сработает, состояние останется; `/rss` его снимает неявно (повторный вызов меню не ломает FSM).
 - `TelegramBadRequest` при показе списка после замены → warning в лог, отчёт уже отправлен.
+
+- `/login*`: без `mytelethon` в `dp` — ошибка внедрения (модуль обязателен, как `jumis_agent`); чужой `from_user` на кнопке → alert и запись в лог, мастер не начинается.
+- Состояния машины входа переводятся в текст: `not_configured` → «в .env нет api_id/api_hash, добавь и сделай /reset»; `invalid_phone`/`no_account`/`banned` → причина текстом, шаг номера остаётся; `flood` → «подожди N секунд»; `invalid_code`/`wrong_password` → 3 попытки, затем «начнём заново — /login»; `expired_code` → кнопка «прислать ещё»; `bad_input` → «нужен код цифрами» / «пустой пароль».
+- Отмена доступна и кнопкой `login:cancel`, и словом («отмена», «отменить», «cancel», «stop», «стоп»); после отмены состояние очищено, QR-задача снята, машина перепроверила сессию.
+- `TelegramBadRequest` при правке сообщения мастера (в т.ч. `message is not modified`, когда цикл переписывает то же самое) — не ошибка: сообщение просто не меняется; если правка невозможна, отправляется новое.
+- Падение QR-цикла пишет traceback в лог и возвращает меню; задача в любом случае снимается из `_qr_tasks` в `finally`.
+- После перезапуска бота незавершённый вход теряется (номер и `phone_code_hash` живут в памяти) — `/login` начинается с шага номера.

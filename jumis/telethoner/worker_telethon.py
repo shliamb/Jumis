@@ -4,19 +4,57 @@ from datetime import datetime
 from utils.common import get_now_datetime, to_app_tz_naive
 from telethon import TelegramClient, events, types, utils
 
-from config import API_ID, API_HASH
+from config import API_HASH, API_ID, PATH_SESSION, TELETHON_CATCH_UP
 from logs.set_logger import logger
-
-
-
+from telethoner.auth import (
+    NEEDS_LOGIN,
+    WAITING_STATES,
+    AuthState,
+    TelethonAuth,
+    classify_error,
+)
 
 
 class myTelethon:
+    RETRY_SEC = 5      # пауза перед переподключением при сети/сбое
+    LOGIN_WAIT_SEC = 300  # как часто перепроверять сессию, пока ждём вход
+
     def __init__(self, queue_messages):
         self.client = None
         self.queue_messages = queue_messages
         self.me_id = None
+        # async (state, detail) -> None: уведомления владельцу о смене состояния
+        self.on_state_change = None
+        # Машина входа: QR/код/2FA. Клиент берёт у нас, чтобы на файл сессии
+        # всегда был ровно один процесс-писатель.
+        self.auth = TelethonAuth(self._ensure_client, self._relay_state)
 
+    async def _relay_state(self, state: AuthState, detail: str) -> None:
+        if self.on_state_change:
+            await self.on_state_change(state, detail)
+
+    def health(self) -> dict:
+        """Статус для `/admin` и уведомлений."""
+        return self.auth.health()
+
+    async def whoami(self) -> dict:
+        """Имя/id аккаунта userbot для сообщений «кто подключён». Пусто — если нет."""
+        try:
+            client = await self._ensure_client()
+            me = await client.get_me()
+        except Exception as e:
+            logger.warning("whoami failed: %s", e)
+            return {}
+        if not me:
+            return {}
+        name = " ".join(
+            part for part in (getattr(me, "first_name", None), getattr(me, "last_name", None)) if part
+        )
+        return {
+            "id": me.id,
+            "name": name or (getattr(me, "username", None) or "owner"),
+            "username": getattr(me, "username", None),
+        }
 
     async def detect_media_info(self, event) -> dict:
         """Определяет точный тип медиафайла и извлекает первичные данные."""
@@ -85,12 +123,28 @@ class myTelethon:
 
 
 
-    def _create_client(self):
-        """Создаёт клиента Telethon и регистрирует обработчики сообщений."""
-        self.client = TelegramClient('session_jumis', API_ID, API_HASH)
+    async def _ensure_client(self):
+        """Один клиент на процесс: создаём при первом обращении и переиспользуем.
 
+        Второй клиент на тот же файл сессии = sqlite-lock, а один и тот же ключ
+        с двух мест Telegram наказывает отзывом (AuthKeyDuplicated). Поэтому
+        и `run()`, и мастер входа берут клиента только здесь.
+        """
+        if self.client is None:
+            if not API_ID or not API_HASH:
+                raise RuntimeError("api_id/api_hash are not set")
+            self.client = TelegramClient(
+                PATH_SESSION, API_ID, API_HASH, catch_up=TELETHON_CATCH_UP
+            )
+            self._register_handlers()
 
+        if not self.client.is_connected():
+            await self.client.connect()
 
+        return self.client
+
+    def _register_handlers(self):
+        """Обработчики личных сообщений и реакций — один раз на клиента."""
 
         @self.client.on(events.MessageEdited())
         async def reaction_handler(event):
@@ -259,26 +313,56 @@ class myTelethon:
 
     async def run(self):
         """
-        Основной цикл: подключается к Telegram и слушает сообщения.
-        Telethon сам переподключается при сетевых обрывах (auto_reconnect=True),
-        а внешний цикл страхует холодный старт и полностью потерянное соединение.
+        Основной цикл: проверяет сессию, ждёт вход (если нужно) и слушает сообщения.
+
+        Никакого `client.start()`: он спрашивает телефон через `input()`, а в боте
+        терминала нет — раньше это давало EOFError, лог «connection lost» каждые
+        5 секунд и мёртвый userbot при живом aiogram. Теперь состояние проверяется
+        явно, а вход делается кнопками в боте (`/login`).
         """
         while True:
             try:
-                # Пересоздаём клиента, чтобы после сбоя не тянуть битое соединение
-                self._create_client()
-                await self.client.start()
+                state = await self.auth.check()
+            except asyncio.CancelledError:
+                await self._disconnect()
+                raise
+            except Exception as e:
+                logger.exception("Telethon session check crashed")
+                await self.auth.set_state(classify_error(e), str(e))
+                await asyncio.sleep(self.RETRY_SEC)
+                continue
+
+            # Вход нужен прямо сейчас: стоим на событии, но раз в 5 минут
+            # перепроверяем — вдруг сессию починили снаружи (create_session.py).
+            if state in NEEDS_LOGIN or state in WAITING_STATES:
+                if state in NEEDS_LOGIN:
+                    logger.warning("Telethon login required (%s)", state.value)
+                try:
+                    await asyncio.wait_for(self.auth.ready.wait(), timeout=self.LOGIN_WAIT_SEC)
+                except asyncio.TimeoutError:
+                    pass
+                continue
+
+            # Сеть/занятый файл/прочее — ждём и пробуем снова, вход не нужен.
+            if state is not AuthState.OK:
+                await asyncio.sleep(self.RETRY_SEC)
+                continue
+
+            try:
                 logger.info("Telethon connected, listening")
                 await self.client.run_until_disconnected()
+                logger.warning("Telethon disconnected")
 
             except asyncio.CancelledError:
                 await self._disconnect()
                 raise
 
             except Exception as e:
-                logger.warning("Telethon connection lost: %s", e)
+                state = classify_error(e)
+                logger.warning("Telethon connection lost (%s): %s", state.value, e)
+                await self.auth.set_state(state, str(e))
                 await self._disconnect()
-                await asyncio.sleep(5)
+                await asyncio.sleep(self.RETRY_SEC)
 
 
     async def stop(self):
@@ -330,6 +414,15 @@ class myTelethon:
         if not self.client or not self.client.is_connected():
             logger.error("Telethon client is not connected")
             return "❌ Error: Telethon client not connected."
+
+        # Сессия проверена и жива? Иначе честнее сказать агенту причину, чем
+        # отдавать ему RPC-ошибку «AUTH_KEY_UNREGISTERED» без перевода.
+        if self.auth.state is not AuthState.OK:
+            logger.warning("Send blocked: userbot state=%s", self.auth.state.value)
+            return (
+                f"❌ Error: userbot is not connected to Telegram "
+                f"(state: {self.auth.state.value}). The owner must log in via /login."
+            )
 
         # Очищаем юзернейм от @ и пробелов
         clean_username = username.strip().lstrip("@") if username else None

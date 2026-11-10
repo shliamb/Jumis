@@ -84,6 +84,34 @@ SQL_RSS = (
 
 
 
+# Память в промпте (модуль memory).
+#   facts_categories.in_prompt  — раздел, который рендерится в system-промпт;
+#   memories.memory_status      — 'live' участвует в поиске и рендере,
+#                                 'superseded'/'archived' остаётся в базе, но
+#                                 не мешает (duбли не удаляем — данные не теряем);
+#   memories.superseded_by      — на какой факт заменён (след, а не удаление).
+SQL_MEMORY_PROMPT = (
+    "ALTER TABLE facts_categories ADD COLUMN IF NOT EXISTS in_prompt BOOLEAN NOT NULL DEFAULT FALSE",
+    "ALTER TABLE facts_categories ADD COLUMN IF NOT EXISTS prompt_order INT NOT NULL DEFAULT 0",
+    "ALTER TABLE facts_categories ADD COLUMN IF NOT EXISTS prompt_title VARCHAR(80)",
+    "ALTER TABLE memories ADD COLUMN IF NOT EXISTS memory_status VARCHAR(20) NOT NULL DEFAULT 'live'",
+    "ALTER TABLE memories ADD COLUMN IF NOT EXISTS superseded_by BIGINT",
+    """
+    CREATE INDEX IF NOT EXISTS idx_memories_live
+        ON memories (category, id) WHERE memory_status = 'live'
+    """,
+    """
+    INSERT INTO facts_categories (name, description, in_prompt, prompt_order, prompt_title) VALUES
+        ('rule', 'Behavior rules that always apply: prohibitions, order of actions, memory hygiene, clients.', TRUE, 10, 'RULES'),
+        ('style_owner', 'How to answer the owner: length, tone, what to omit.', TRUE, 20, 'STYLE: OWNER'),
+        ('style_client', 'How to write to clients and new contacts: address form, greeting, length.', TRUE, 30, 'STYLE: CLIENTS'),
+        ('style_personal', 'How to write to family and close friends: address form, tone, shorthand.', TRUE, 40, 'STYLE: CLOSE PEOPLE'),
+        ('profile', 'Owner passport: address, schedule, prices, family, key people, debts.', TRUE, 50, 'OWNER — PASSPORT')
+    ON CONFLICT (name) DO NOTHING
+    """,
+)
+
+
 # Create TABLES:
 def create_tables_in_db():
     connection, cursor = False, False
@@ -344,6 +372,10 @@ def create_tables_in_db():
         for statement in SQL_RSS:
             cursor.execute(statement)
 
+        # Память в промпте: разделы правил/стилей/паспорта и статусы фактов
+        for statement in SQL_MEMORY_PROMPT:
+            cursor.execute(statement)
+
 
 
 
@@ -372,8 +404,8 @@ def create_tables_in_db():
 async def ensure_schema(db) -> bool:
     """
     Идемпотентно создаёт объекты, которых может не быть на живой базе:
-    дайджесты истории, таблицы новостей (rss_feeds / rss_digests)
-    и векторный индекс истории.
+    дайджесты истории, таблицы новостей (rss_feeds / rss_digests),
+    колонки и разделы памяти в промпте, векторный индекс истории.
 
     Нужен на старте бота: `create_tables_in_db()` синхронный и вызывается
     только командой `/crTabDb`, а работать чистке, новостям и поиску нужно сразу.
@@ -381,8 +413,12 @@ async def ensure_schema(db) -> bool:
     """
     ok = True
 
-    # Новые служебные таблицы: дайджесты истории и мировые новости.
-    for label, statements in (("chat_digests", SQL_CHAT_DIGESTS), ("rss", SQL_RSS)):
+    # Новые служебные таблицы: дайджесты истории, мировые новости, память в промпте.
+    for label, statements in (
+        ("chat_digests", SQL_CHAT_DIGESTS),
+        ("rss", SQL_RSS),
+        ("memory_prompt", SQL_MEMORY_PROMPT),
+    ):
         for statement in statements:
             try:
                 await db.execute(statement)
@@ -408,7 +444,7 @@ async def ensure_schema(db) -> bool:
         logger.warning("[Schema] Таблицы messages нет — индекс истории пропущен (создайте таблицы: /crTabDb)")
 
     if ok:
-        logger.info("[Schema] Схема служебных объектов готова: chat_digests + rss_feeds/rss_digests + idx_messages_embedding")
+        logger.info("[Schema] Схема служебных объектов готова: chat_digests + rss_feeds/rss_digests + память в промпте + idx_messages_embedding")
     return ok
 
 

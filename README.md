@@ -1,240 +1,150 @@
-<p align="center">
-  <img src="https://img.shields.io/badge/python-3.11+-blue?style=flat-square&logo=python&logoColor=white" alt="Python">
-  <img src="https://img.shields.io/badge/docker-compose-2496ED?style=flat-square&logo=docker&logoColor=white" alt="Docker">
-  <img src="https://img.shields.io/badge/PostgreSQL-pgvector-4169E1?style=flat-square&logo=postgresql&logoColor=white" alt="PostgreSQL">
-  <img src="https://img.shields.io/badge/aiogram-3.31-2CA5E0?style=flat-square&logo=telegram&logoColor=white" alt="aiogram">
-  <img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="License">
-  <img src="https://img.shields.io/github/stars/shliamb/Jumis?style=flat-square&color=yellow&cacheSeconds=3600" alt="Stars">
-  <img src="https://img.shields.io/github/last-commit/shliamb/Jumis?style=flat-square&cacheSeconds=3600" alt="Last commit">
-  <img src="https://img.shields.io/github/languages/top/shliamb/Jumis?style=flat-square" alt="Top language">
-</p>
-
-# 🇷🇺 Jumis
-
-> **Персональный ИИ-секретарь, который живёт в твоём Telegram.**
-> Не бот. Не автопилот. Продолжение тебя — только быстрее.
-
----
-
-## Что это такое
-
-Представь, что у тебя есть секретарь.
-
-Не тот, что сидит в приёмной и отвечает «шеф занят». А тот, который знает всех твоих клиентов по именам, помнит, что ты говорил вчера, знает, кому ты забыл ответить, и в курсе, что у твоей младшей дочери день рождения через три дня. Тот, кому ты просто говоришь голосом: *«Глянь, что там этот написал, и ответь как обычно»* — и через секунду ответ уже готов, с твоими смайликами, твоим тоном, твоими словами.
-
-Jumis — это такой секретарь. Только он не человек, он живёт в Telegram, работает круглосуточно, стоит копейки и никогда не устаёт.
-
----
-
-## Зачем это нужно
-
-Потому что писать — долго. А говорить — быстро.
-
-Потому что держать в голове сорок диалогов одновременно — невозможно. А Jumis держит.
-
-Потому что иногда приходит клиент, пишет целую поэму, а тебе нужно просто понять: что он хочет, и что ему ответить. И ты говоришь: *«Сократи. Что он хочет?»* — и получаешь суть в двух строках.
-
-Это не попытка сделать агента, который отвечает за тебя. Это попытка сделать инструмент, который **помогает тебе оставаться собой**, но в десять раз быстрее.
-
----
-
-## Как это выглядит в жизни
-
-Ты открываешь Telegram. Бот уже ждёт. Он не тычет в тебя кнопками меню — их просто нет. Он пишет сам:
-
-> **Jumis:** Привет. Я тут. Могу то-то и то-то. Погнали.
-
-Дальше — ты просто говоришь голосом. Или текстом. Он ловит каждое личное сообщение, которое тебе приходит, сохраняет, превращает в смысл, векторизует, кладёт в память. Когда ты отвечаешь — тоже сохраняет. Через месяц у него уже 8000 сообщений, и он помнит их все.
-
-Он присылает тебе короткие красивые оповещения: *«Написали двое. Четыре сообщения. Два от этого, два от этого»*. Если человек написал впервые — звук. Если повторно — тихо, без раздражения. Ты ответил вручную, или просто поставил реакцию — он снимает с напоминания. Забыл ответить — он мягко напомнит: *«Ты вот этому не ответил. Может, ответим?»*
-
-А ещё он умеет:
-- помнить факты с категориями («адрес мастерской», «время работы») и подтягивать их в нужный момент
-- ставить будильники и напоминалки через крон
-- писать «как обычно» — твоим стилем, с твоими смайликами
-- переключаться на умную модель, когда задача сложная, и возвращаться назад сам
-- показывать процесс в реальном времени — как в GPT или Claude, только в Telegram
-
-Никакой магии. Просто аккуратно собранный, экономный, управляемый секретарь.
-
----
-
-## Философия проекта
-
-**Jumis не решает за тебя. Она решает с тобой.**
-
-Здесь нет цели сделать бездумного автопилота, который отвечает клиентам без твоего ведома. Цель — снять с тебя рутину: печатание, поиск контекста, запоминание мелочей. Экспертность, решения, голос — остаются твоими.
-
-Все инструменты специально сделаны **узкими**. Чтобы не засорять диалог. Чтобы не жечь токены. Чтобы оставаться быстрым и дешёвым. DeepSeek кэширует большую часть, и месяц активной работы стоит буквально полтора доллара.
-
-Это не «ещё один AI-стартап». Это личный инструмент, который однажды захотелось собрать — и он работает уже больше месяца, стабильно, без вылетов.
-
----
-
-## Технический стек
-
-Коротко, по делу — для тех, кому интересна начинка.
-
-**Ядро**
-- `aiogram 3.31` — Telegram-бот
-- `telethon 1.44` — перехват и отправка личных сообщений от твоего имени
-- `litellm 1.93` — единый слой над моделями (OpenAI, DeepSeek, Anthropic, Gemini и др.), автоподтягивание новых моделей и цен
-
-**Данные**
-- `PostgreSQL` + `pgvector` — хранение сообщений, пользователей, фактов, памяти
-- `asyncpg`, `psycopg2` — асинхронная и синхронная работа с БД
-- Минимальная векторизация — `sentence-transformers`
-
-**Голос**
-- `kairos-asr[gpu]` — быстрая и качественная транскрибация аудио в текст (китайская модель, миллисекунды)
-- `soundfile`, `cffi` — работа со звуком
-- `ffmpeg`, `libsndfile1` — системные зависимости
-
-**Прочее**
-- `python-dotenv` — окружение
-- `aiohttp-socks` — SOCKS-прокси
-- `lxml`, `numpy`, `markdown` — утилиты
-- `croniter` — будильники и напоминалки
-- `Docker Compose` — запуск одной командой
-- `uv` — управление зависимостями
-
-**Железо:** работает даже на скромной видеокарте (проверено на 3060, ~4 ГБ VRAM). Векторизация и транскрибация — локальные и бесплатные.
-
----
-
-## Установка
-
-> Проект в стадии активной доработки. Публичная инструкция по установке появится позже.
-> Сейчас в репозитории — код, конфиги и заметки. Если хочешь собрать сам — загляни в `requirements.txt`, `docker-compose.yml` и `.env.example`.
-
----
-
-## Что дальше
-
-- Выход в интернет через **компьютерное зрение** (скриншот → смысл), а не через HTML-мусор
-- Парсер РС-рассылок и Telegram-каналов — только важное, без шума
-- Многопоточные вызовы инструментов
-- Доступ к большему числу функций
-- Инструменты очистки истории
-
-Этот репозиторий — **open source**. Пользуйся, форкай, улучшай.
-
----
-
-<p align="center"><i>Jumis. Секретарь, который не устаёт.</i></p>
-
-
-
-# 🇬🇧 Jumis
-
-> **A personal AI secretary that lives inside your Telegram.**
-> Not a bot. Not an autopilot. An extension of you — just faster.
-
----
-
-## What it is
-
-Imagine you have a secretary.
-
-Not the kind that sits at the front desk and says "the boss is busy." The kind that knows all your clients by name, remembers what you said yesterday, knows who you forgot to reply to, and is aware that your youngest daughter's birthday is in three days. The kind you just tell out loud: *"Check what that guy wrote and reply like usual"* — and a second later the reply is ready, with your emojis, your tone, your words.
-
-Jumis is that secretary. Only he's not human, he lives in Telegram, works around the clock, costs pennies, and never gets tired.
-
----
-
-## Why it exists
-
-Because typing is slow. Talking is fast.
-
-Because holding forty conversations in your head at once is impossible. Jumis holds them.
-
-Because sometimes a client sends you a whole poem, and all you need to know is: what does he want, and what should you say back. So you say: *"Summarize it. What does he want?"* — and get the point in two lines.
-
-This isn't an attempt to build an agent that replies for you. It's an attempt to build a tool that **helps you stay yourself**, just ten times faster.
-
----
-
-## What it looks like in real life
-
-You open Telegram. The bot is already waiting. No menu buttons — there are none by design. It speaks first:
-
-> **Jumis:** Hey. I'm here. I can do this and that. Let's go.
-
-From there — you just talk. Voice or text. It catches every personal message that comes to you, stores it, turns it into meaning, vectorizes it, and puts it into memory. When you reply — it stores that too. After a month, it holds 8,000 messages, and remembers them all.
-
-It sends you short, clean notifications: *"Two people wrote. Four messages. Two from this one, two from that one."* First message from someone new — a sound. Repeat message — silent, no nagging. You replied manually, or just dropped a reaction — it clears the reminder. Forgot to reply — it gently nudges: *"You didn't reply to this one. Want to?"*
-
-It can also:
-- remember facts with categories ("workshop address," "working hours") and pull them up at the right moment
-- set alarms and reminders via cron
-- write "like usual" — your style, your emojis
-- switch to a smarter model for hard tasks, and switch back on its own
-- show its process in real time — like GPT or Claude, but inside Telegram
-
-No magic. Just a carefully assembled, economical, controllable secretary.
-
----
-
-## Philosophy
-
-**Jumis doesn't decide for you. It decides with you.**
-
-There's no goal here to build a mindless autopilot that replies to clients behind your back. The goal is to take away the routine: typing, searching context, remembering small things. Expertise, decisions, voice — they stay yours.
-
-Every tool is deliberately **narrow**. To keep the dialogue clean. To not burn tokens. To stay fast and cheap. DeepSeek caches most of it, and a month of active use costs literally a dollar and a half.
-
-This isn't "yet another AI startup." It's a personal tool that one day wanted to be built — and it's been running for over a month, stable, without crashes.
-
----
-
-## Tech stack
-
-Short and to the point — for those who care about the internals.
-
-**Core**
-- `aiogram 3.31` — Telegram bot
-- `telethon 1.44` — intercepting and sending personal messages as you
-- `litellm 1.93` — unified layer over models (OpenAI, DeepSeek, Anthropic, Gemini, and more), auto-pulls new models and prices
-
-**Data**
-- `PostgreSQL` + `pgvector` — messages, users, facts, memory
-- `asyncpg`, `psycopg2` — async and sync DB access
-- Minimal vectorization — `sentence-transformers`
-
-**Voice**
-- `kairos-asr[gpu]` — fast, high-quality audio-to-text transcription (Chinese model, milliseconds)
-- `soundfile`, `cffi` — audio handling
-- `ffmpeg`, `libsndfile1` — system dependencies
-
-**Other**
-- `python-dotenv` — environment
-- `aiohttp-socks` — SOCKS proxy
-- `lxml`, `numpy`, `markdown` — utilities
-- `croniter` — alarms and reminders
-- `Docker Compose` — one-command startup
-- `uv` — dependency management
-
-**Hardware:** runs on even a modest GPU (tested on a 3060, ~4 GB VRAM). Vectorization and transcription are local and free.
-
----
+**English** · [Русский](README.ru.md)
+
+# Jumis
+
+A personal AI secretary that lives in your Telegram. A userbot (Telethon) reads your private
+chats and stores them in your own PostgreSQL, and an aiogram bot lets you ask questions,
+search the history, manage memory and send messages on your behalf.
+
+## What it does
+
+- **Owns your inbox.** Every private message you receive (and send) is saved to your database and
+  vectorised. Unanswered conversations are collected in one widget; it clears itself when you reply.
+- **Answers as you.** It drafts replies in your tone, using your saved style and facts. Messages are
+  sent only when you ask — there is no autopilot.
+- **Remembers.** Three layers of memory: always-visible rules, response styles and a personal
+  passport; an archive of facts with semantic search; nightly cleanup that merges duplicates
+  instead of deleting them.
+- **Understands voice.** Voice messages are transcribed locally (no cloud), and you can talk to the
+  bot instead of typing.
+- **Keeps time.** Reminders, alarms and cron tasks run through the scheduler.
+- **Reads the news.** A daily digest from RSS feeds, written by the model with source links.
+- **Maintains itself.** Junk cleanup, old conversations compressed into digests, nightly database
+  backups, automatic schema updates on start.
+
+## How it works
+
+Two Telegram interfaces in one process:
+
+- **owner bot** (aiogram) — the chat where you talk to Jumis: questions, commands, admin panel;
+- **userbot** (Telethon) — your own account, used to read and send private messages.
+
+The agent works through a set of narrow tools (search, facts, send message, tasks, news, backups)
+instead of one giant prompt, so a request costs little. The model is called through LiteLLM, so
+providers and models can be swapped in config. Everything is stored locally in PostgreSQL with
+pgvector; only the LLM request leaves the machine.
+
+## Stack
+
+| Layer | What |
+| --- | --- |
+| Language | Python 3.12 |
+| Telegram | `aiogram` 3.31 (bot), `telethon` 1.44 (userbot) |
+| Models | `litellm` 1.93 — DeepSeek by default, others configurable |
+| Database | PostgreSQL 17 + `pgvector` (Docker image `pgvector/pgvector:pg17`), `asyncpg`, `psycopg2` |
+| Embeddings | `sentence-transformers`, `multilingual-e5-base` (768 dims, local) |
+| Speech | `kairos-asr` (local, GPU) |
+| Runtime | `docker compose` for the database, `uv`/`pip` for Python packages |
+
+## Requirements
+
+- Linux, Docker and Docker Compose
+- Python 3.12
+- `ffmpeg`, `libsndfile1`
+- An NVIDIA GPU for local speech recognition (`kairos-asr`); text features work without it
+- Telegram `api_id` / `api_hash` from [my.telegram.org](https://my.telegram.org) and a bot token
+  from [@BotFather](https://t.me/BotFather)
+- An LLM API key (DeepSeek by default)
 
 ## Installation
 
-> The project is under active development. Public install instructions will come later.
-> For now, the repo holds the code, configs, and notes. If you want to build it yourself — check `requirements.txt`, `docker-compose.yml`, and `.env.example`.
+```bash
+git clone https://github.com/shliamb/Jumis.git
+cd Jumis
 
----
+cp .env.example .env          # fill in the values, see Configuration
+cp .env.llm.example .env.llm  # LLM provider keys
 
-## What's next
+docker compose up -d postgres # PostgreSQL 17 + pgvector
 
-- Internet access via **computer vision** (screenshot → meaning), not HTML garbage
-- Parser for government broadcasts and Telegram channels — only what matters, no noise
-- Multi-threaded tool calls
-- Access to more functions
-- History cleanup tools
+python3.12 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+.venv/bin/pip install "kairos-asr[gpu]" sentence-transformers
 
-This repo is **open source**. Use it, fork it, improve it.
+.venv/bin/python jumis/run_bot.py
+```
 
----
+First start:
 
-<p align="center"><i>Jumis. The secretary that never gets tired.</i></p>
+1. Send `/start` to your bot — it registers you as the owner.
+2. Send `/login` and confirm the QR link in Telegram (or enter the code). This creates
+   `session_jumis.session` in the project root — the userbot's authorisation.
+3. Tables are created automatically at start. `/crTabDb` creates them manually if needed.
+
+> A full image, `install.sh` and a compose file that runs the bot as a container are the next step.
+> When that lands, the session file must be mounted from the host (`SESSION_PATH`), so a login
+> survives container rebuilds.
+
+## Configuration
+
+`.env`:
+
+| Variable | Meaning |
+| --- | --- |
+| `telegram_bot_token` | bot token from @BotFather |
+| `admin_id` | your Telegram user id — the only account with access |
+| `api_id`, `api_hash` | Telegram API credentials for the userbot |
+| `USER_DB`, `PASSWORD_DB`, `POSTGRES_DB` | PostgreSQL credentials (match `docker-compose.yml`) |
+| `LOG_LEVEL` | `DEBUG` / `INFO` / `WARNING` / `ERROR` |
+| `SESSION_PATH` | optional, path to the Telethon session file |
+
+`.env.llm`: provider keys — `DEEPSEEK_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`,
+`ANTHROPIC_API_KEY`, `XAI_API_KEY`. Adding a key makes those models available in `/getMod`.
+
+Both files are git-ignored. The database stores your message history, so keep it private.
+
+## Usage
+
+Talk to the bot like a person: text or voice. It answers with streaming and can offer buttons with
+options when a question has clear choices.
+
+Commands:
+
+| Command | Purpose |
+| --- | --- |
+| `/admin` | menu, userbot status, all admin commands |
+| `/login` | connect or re-connect the userbot (QR or code) |
+| `/getMod`, `/setMod` | list models / choose the default one |
+| `/cleanup`, `/digests` | history cleanup and compressed digests |
+| `/backup`, `/backups` | database backup copies |
+| `/rss` | news sources and digest |
+| `/logs` | download logs |
+| `/reset` | restart the bot |
+
+## Project layout
+
+```
+jumis/
+  run_bot.py        entry point: everything in one asyncio process
+  config.py         settings, paths, session location
+  handlers/         aiogram routers (admin panel, login, options, rss, …)
+  jumis_agent/      the agent: streaming, tool loop, inbox widget
+  llm/              LiteLLM layer, system prompt, tool definitions
+  memory/           three-layer memory and nightly dedupe
+  telethoner/       userbot session, login machine, alerts
+  ingest/           incoming messages → database → vectorisation
+  database/         schema, repositories
+  cleaner/          junk cleanup and history digests
+  pgbackup/         nightly pg_dump
+  rss/              news feeds and digests
+  scheduler/        reminders, alarms, cron
+```
+
+Every module has a `SPEC.md` describing its inputs, outputs and logic; `MEMORY.md` is the map of
+the whole project.
+
+## Status
+
+Personal project, single owner, private chats only. It sends messages only on explicit request and
+never replies to anyone on its own. Work in progress — container packaging and a one-command
+installer are next.

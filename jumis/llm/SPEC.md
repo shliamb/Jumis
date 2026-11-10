@@ -5,14 +5,15 @@
 Слой работы с LLM через LiteLLM:
 
 - `llm_router.py` — `LLMWorker`: каталог моделей по активным ключам, выбор default/cheap/smart, диалог, стриминг, вызов инструментов, валидация и откат истории. `simple_call`/`_call_request` принимают необязательный `timeout` — персональный лимит на вызов для длинных генераций (по умолчанию общий `LLM_TIMEOUT`).
-- `agents.py` — системный промпт и список инструментов `jumis_agent`, человекочитаемые статусы тулзов.
-- `functions.py` — реализация 33 инструментов + JSON-схемы `FUNCTIONS` (29 подключены к агенту).
+- `agents.py` — загрузка системного промпта из Markdown (`prompts/jumis_agent.md`), список инструментов `jumis_agent`, человекочитаемые статусы тулзов.
+- `prompts/jumis_agent.md` — сам текст промпта: характер, запреты, формат, дисциплина памяти и инструментов. Правится руками, без питона; при отсутствии файла `load_prompt` отдаёт короткую заглушку.
+- `functions.py` — реализация 33 инструментов + JSON-схемы `FUNCTIONS` (30 подключены к агенту).
 - `token_usege.py` — `DBTokenLogger` (callback LiteLLM) для учёта расхода токенов.
 
 ## Входные данные
 
 - `.env.llm`: `DEEPSEEK_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `XAI_API_KEY` (наличие ключа включает провайдера).
-- `AGENTS["jumis_agent"]`: `system` + `tools` (29 инструментов; `get_pending_queue`, `get_categories_facts`, `get_categories_users` и `update_fact` в этом списке отсутствуют).
+- `AGENTS["jumis_agent"]`: `system` (из `prompts/jumis_agent.md`) + `tools` (30 инструментов; не подключены только служебные `get_pending_queue`, `get_categories_facts`, `get_categories_users`).
 - `FUNCTIONS`: `description`, `function`, `schema` (JSON Schema) на каждый инструмент.
 - Настройки: `HISTORY_LIMIT` (30), `LLM_TIMEOUT` (30 с), `LLM_TEMPERATURE` (0.1, `None` — не передавать), `DEFAULT_FALLBACK_MODEL`.
 - Аргументы инструментов приходят от LLM; категории (`facts_category`, `user_category`) подставляются динамически из БД.
@@ -32,7 +33,8 @@
 2. `refresh_llm_models`: профиль админа из `users` → `model_default/model_cheap/model_smart`, `current_model = model_default`; при отсутствии профиля — `DEFAULT_FALLBACK_MODEL`.
 3. `change_model("default"|"cheap"|"smart"|"provider/model")`: переключает `current_model`, возвращает bool.
 4. `get_tools_for_agent`: deepcopy схемы, подстановка enum категорий из `db_memory.fact_categories` / `db_users.users_categories` (фолбэки `fact` / `not_defined`).
-5. `call_function`: по сигнатуре функции автоматически внедряет `db_memory`, `db_users`, `db_messages`, `db_tasks`, `scheduler`, `mytelethon`, `jumis_agent`, `queue_new_mess`, `llm`, `cleaner`, `backups`; поддерживает callable и `{"function": ...}`.
+4a. `get_tools("jumis_agent")`: к промпту из файла добавляются блоки памяти (`Memory.prompt_blocks`): разделы правил/стилей/паспорта и карта архива. Собираются из БД на каждый запрос, поэтому правка факта видна уже в следующем ответе; сбой памяти даёт пустой блок, промпт не ломается.
+5. `call_function`: по сигнатуре функции автоматически внедряет `db_memory`, `db_users`, `db_messages`, `db_tasks`, `scheduler`, `mytelethon`, `jumis_agent`, `queue_new_mess`, `llm`, `cleaner`, `backups`, `rss`, `memory`; поддерживает callable и `{"function": ...}`.
 6. `_call_request`: валидация `dialog` → при битом JSON откат на `old_dialog`; system добавляется первым; `backup_dialog` для отката при ошибке; стрим через `stream_wrapper`, успешное завершение сохраняет `old_dialog = deepcopy(dialog)`.
 7. `_safe_trim` режет историю до `HISTORY_LIMIT`, начиная с ближайшего `user` (не рвёт tool-пары).
 8. `refine_stream_tools` накапливает tool_calls по `index`, отдаёт их одним блоком после конца стрима.
@@ -54,6 +56,10 @@
 16. Новости (`rss`): `rss_digest(hours, fresh)` → сводка + сохранение в `rss_digests`; `rss_archive(days, query, limit, digest_id)` → короткие выжимки или полная по id; `rss_feeds()` → список с состоянием; `rss_feeds_edit(add, remove, note)` → добавление/удаление одного фида. Внедрение сервиса — по имени параметра `rss` (как `cleaner` и `backups`): `LLMWorker.rss` ставится в `run_bot` после создания модуля.
 17. Правило в системном промпте: сводку владельцу отдавать как есть — со сносками в скобках и блоком выводов, не пересказывая своими словами и не добавляя фактов, которых в сводке нет.
 
+18. Память (`memory`): `write_fact` перед вставкой считает вектор один раз и ищет живые факты с близостью ≥ 0.93; при совпадении НЕ пишет, а возвращает `NOT SAVED: … #id … update_fact(id=…)` — так память перестаёт плодить копии. Вектор при записи сохраняется сразу, фоновая задача остаётся только фолбэком на случай сбоя эмбеддера.
+19. `update_fact` подключён агенту: правка факта пересчитывает его вектор, поэтому попадание в поиск не деградирует. `search_facts` кодирует запрос как `query` (у e5 разные префиксы `query:`/`passage:`), возвращает только живые факты и всегда печатает `#id`, чтобы следующий шаг мог быть `update_fact`.
+20. Категории в enum и в промпте совпадают: пять разделов (`rule`, `style_owner`, `style_client`, `style_personal`, `profile`) помечены `in_prompt` и рендерятся в system, остальные — полки карты памяти.
+
 ## Обработка ошибок
 
 - Нет ключей: предупреждение, `available_models = []`; `refresh_llm_models` вернёт `False` и `DEFAULT_FALLBACK_MODEL`.
@@ -69,3 +75,6 @@
 
 - `simple_call` без `system` → `ValueError`; сбой модели приходит текстом («Ошибка сети: ...») в `content`, поэтому вызывающий код обязан отличать ошибку от ответа (модуль `rss` делает это через `analyst.looks_like_error`).
 - Персональный `timeout` вызова переопределяет `LLM_TIMEOUT` только для этого запроса; сообщение о таймауте в логе показывает фактический лимит.
+- Файл промпта не читается → `load_prompt` пишет `logger.error` и возвращает `FALLBACK_SYSTEM`: агент остаётся работоспособным.
+- Сбой `Memory.prompt_blocks` → блок памяти не добавляется (лог), остальной промпт и инструменты работают.
+- `write_fact` без эмбеддера: факт пишется без вектора и догоняется фоновой задачей; при сбое эмбеддинга — тот же путь.

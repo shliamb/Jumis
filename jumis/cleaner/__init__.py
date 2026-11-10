@@ -41,6 +41,7 @@ class Cleaner:
         self.db_tasks = db_tasks
         self.llm = llm
         self.scheduler = scheduler
+        self.memory = None  # модуль памяти: ночная склейка дублей (ставится в run_bot)
 
         self.janitor = Janitor(db)
         self.digester = Digester(db, db_users, llm)
@@ -109,10 +110,20 @@ class Cleaner:
                 result["digest"] = {"error": str(e)}
                 logger.error("[Cleaner] Самаризация упала: %s", e, exc_info=True)
 
+            # Память: склейка дублей и отложение устаревших «сегодня/завтра».
+            # Идёт последней: модели уже разогреты, а факты к утру чистые.
+            if self.memory and getattr(self.memory, "cleaner", None):
+                try:
+                    result["memory"] = await self.memory.cleaner.run_night()
+                except Exception as e:
+                    result["memory"] = {"error": str(e)}
+                    logger.error("[Cleaner] Уборка памяти упала: %s", e, exc_info=True)
+
             logger.info(
-                "[Cleaner] Ночной прогон завершён: удалено=%s, батчей=%s",
+                "[Cleaner] Ночной прогон завершён: удалено=%s, батчей=%s, память=%s",
                 (result.get("hygiene") or {}).get("deleted_total"),
                 (result.get("digest") or {}).get("batches"),
+                (result.get("memory") or {}).get("superseded"),
             )
         finally:
             self._nightly_running = False

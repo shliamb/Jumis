@@ -15,6 +15,7 @@ from config import DOWNLOAD, ADMIN_ID, PATH_LOGS, DOCKER
 from database.create_tables import create_tables_in_db
 from database.deleted_tables_db import drop_all_tables_and_reset_schema
 from handlers.common import rights_verification
+from handlers.login import state_label
 from pathlib import Path
 from io import BytesIO
 
@@ -28,7 +29,7 @@ router = Router()
 
 # ADMIN MENU:
 @router.message(Command('admin'))
-async def admin_menu(message: types.Message):
+async def admin_menu(message: types.Message, mytelethon):
     await typing(message)
 
     lang = message.from_user.language_code
@@ -37,9 +38,19 @@ async def admin_menu(message: types.Message):
 
     logger.info("Admin menu requested: user=%s", user_id)
 
+    # Состояние юзербота: показываем прямо в меню, чтобы не гадать, почему
+    # бот не видит переписку.
+    ub_state = mytelethon.health()["state"]
+    ub_ru = state_label(ub_state, "ru")
+    ub_en = state_label(ub_state, "en")
+
     admin_menu_ru = "\n".join([
         "<b>🎛 АДМИН-МЕНЮ</b>",
         "─────────────────",
+        "<b>🔌 ЮЗЕРБОТ (Telethon):</b>",
+        f"├ Статус: {ub_ru}",
+        "└ /login — Войти / подтвердить",
+        "",
         "<b>📋 ЛОГИ СИСТЕМЫ:</b>",
         "├ /logs — Скачать логи",
         "└ /dLogs — Очистить логи",
@@ -85,6 +96,10 @@ async def admin_menu(message: types.Message):
     admin_menu_en = "\n".join([
         "<b>🎛 ADMIN MENU</b>",
         "─────────────────",
+        "<b>🔌 USERBOT (Telethon):</b>",
+        f"├ Status: {ub_en}",
+        "└ /login — Log in / confirm",
+        "",
         "<b>📋 SYSTEM LOGS:</b>",
         "├ /logs — Download logs",
         "└ /dLogs — Clear logs",

@@ -108,6 +108,9 @@ class LLMWorker:
         # Модуль мировых новостей (устанавливается в run_bot после создания)
         self.rss = None
 
+        # Модуль памяти: блоки промпта и подхват (устанавливается в run_bot)
+        self.memory = None
+
         self.admin_id = ADMIN_ID
 
 
@@ -362,7 +365,19 @@ class LLMWorker:
                 system = self.agents[agent]["system"]
                 function_names = self.agents[agent].get("tools", [])
                 tools = await self.get_tools_for_agent(function_names)
-                
+
+                # Память добавляется только главному агенту: правила, стили,
+                # паспорт и карта архива собираются из БД на каждый запрос,
+                # поэтому правка факта видна уже в следующем ответе.
+                if agent == "jumis_agent" and self.memory:
+                    try:
+                        blocks = await self.memory.prompt_blocks()
+                    except Exception as e:
+                        blocks = ""
+                        logger.error("Memory blocks failed: %s", e, exc_info=True)
+                    if blocks:
+                        system = f"{system.rstrip()}\n\n{blocks}"
+
                 return system, tools
             
             except KeyError as e:
@@ -412,6 +427,7 @@ class LLMWorker:
                 if 'cleaner' in sig.parameters: call_kwargs['cleaner'] = self.cleaner
                 if 'backups' in sig.parameters: call_kwargs['backups'] = self.backups
                 if 'rss' in sig.parameters: call_kwargs['rss'] = self.rss
+                if 'memory' in sig.parameters: call_kwargs['memory'] = self.memory
 
 
                 # Вызов в зависимости от типа функции (async/sync)
