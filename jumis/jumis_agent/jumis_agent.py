@@ -1049,6 +1049,10 @@ class JumisAgent:
         MAX_RETRIES = 3
 
         while True:
+            # None означает, что сообщение из очереди не взято: task_done()
+            # в finally вызывать нельзя (иначе «called too many times» при
+            # остановке процесса, когда отменяется ожидание get()).
+            task_data = None
             try:
                 # Ждем появления сообщения в очереди
                 task_data = await self.queue_new_mess.get()
@@ -1096,7 +1100,8 @@ class JumisAgent:
                 logger.error(f"💥 [JumisAgent Worker] Критическая ошибка обработки: {e}", exc_info=True)
                 await asyncio.sleep(1)
             finally:
-                self.queue_new_mess.task_done()
+                if task_data is not None:
+                    self.queue_new_mess.task_done()
 
 
 

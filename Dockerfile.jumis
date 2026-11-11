@@ -1,35 +1,57 @@
 FROM python:3.12-slim
 
-ENV PYTHONUNBUFFERED=1
+# UID/GID хоста: файлы в ./state, ./jumis/logs и ./jumis/backups должны
+# оставаться твоими, иначе локальный запуск после контейнера не сможет писать.
+ARG UID=1000
+ARG GID=1000
 
-# Рабочая директория
-WORKDIR /jumis
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    TZ=Europe/Moscow
 
-# 1. Системные пакеты (исправлено под Ubuntu 24.04)
+# Системные пакеты.
+# pg_dump ставится из PGDG версии 17 — ровно как сервер (pgvector:pg17):
+# клиент 15 из Debian отказывается дампить базу новее себя, а ночной бэкап
+# внутри контейнера запускает pg_dump локально (docker CLI здесь нет).
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    postgresql-client \
-    ffmpeg \
-    libsndfile1 \
-    libsm6 \
-    libxext6 \
-    libgl1 \
-    libglib2.0-0 \
+        ca-certificates \
+        curl \
+        gnupg \
+        ffmpeg \
+        libsndfile1 \
+        passwd \
+    && install -d /usr/share/postgresql-common/pgdg \
+    && curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+        -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+    && echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt bookworm-pgdg main" \
+        > /etc/apt/sources.list.d/pgdg.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends postgresql-client-17 \
     && rm -rf /var/lib/apt/lists/*
 
-# 2. Кэшируем основные зависимости из requirements.txt
-COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+WORKDIR /jumis
 
-# 3. Ставим специфичные тяжелые библиотеки (+ soundfile)
-RUN pip install --no-cache-dir \
-    telethon \
-    Pillow \
-    ultralytics \
-    soundfile \
-    kairos-asr[gpu]
+# Версии — ровно те, на которых проект работает локально:
+# requirements.lock снят с рабочего .venv, а не устаревший requirements.txt.
+COPY requirements.lock ./
+RUN pip install -r requirements.lock
 
-# 4. Копируем исходный код
+# uv нужен админ-команде /uplLLM (обновление LiteLLM на горячую).
+RUN pip install uv
+
 COPY ./jumis/ ./jumis/
 
-# Запуск скрипта 
+# Часть файлов в репозитории лежит с правами 600 (их создавали инструменты),
+# а контейнер работает не root: делаем код читаемым для пользователя jumis.
+RUN chmod -R a+rX /jumis/jumis
+
+# Каталог под файл сессии по умолчанию (в compose монтируется томом в /state).
+RUN groupadd -g "${GID}" jumis \
+    && useradd -u "${UID}" -g "${GID}" -m -d /home/jumis jumis \
+    && mkdir -p /jumis/state \
+    && chown -R "${UID}:${GID}" /home/jumis /jumis/state
+
+USER jumis
+
 CMD ["python", "jumis/run_bot.py"]

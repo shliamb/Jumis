@@ -1,0 +1,27 @@
+# Контекст сборки не должен тащить данные и окружение:
+# без этого файла в docker build уезжает ~8.5 ГБ (venv, модели, json, бэкапы).
+.venv
+.git
+.idea
+models_cache
+state
+
+# Секреты и сессия Telethon в образ не попадают никогда.
+.env
+.env.llm
+session_jumis.session
+session_jumis.session-journal
+**/*.session
+**/*.session.old
+
+# Данные времени выполнения (монтируются томами).
+jumis/json
+jumis/backups
+jumis/logs/files
+jumis/downloads
+
+# Документация не нужна в образе (иначе правка SPEC.md пересобирает image).
+**/SPEC.md
+
+**/__pycache__
+**/*.pyc

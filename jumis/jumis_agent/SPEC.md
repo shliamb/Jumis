@@ -45,6 +45,7 @@
 6. Голос: `stt.transcribe_telegram_voice`, эхо-транскрипт в чат (`🎙️ ...`), затем обычный запрос.
 7. `message_processing`: новый пир → удалить старый виджет, отправить новый со звуком; тот же пир → `edit_message_text`; ответ владельца (`outbound_owner`) → удалить пир из очереди; очередь пуста → удалить виджет; новый пир при существующем виджете → пересоздать. В обоих путях (`send_message` и `edit_message_text`) передаётся `reply_markup=self._inbox_keyboard()` — кнопка `inbox:clear` не теряется при перерисовке.
 8. `run_queue_worker`: берёт `queue_new_mess`, обрабатывает с `wait_for(10s)`, до 3 повторов при таймауте.
+9. `run_queue_worker` при остановке: `finally` вызывает `task_done()` только если сообщение реально взято (`task_data is not None`). Раньше отмена ожидания `get()` при SIGTERM давала `ValueError: task_done() called too many times` в момент закрытия процесса.
 9. В `finally` сбрасывается `agent_busy` и модель возвращается на `default`, если была переключена инструментом `change_model`.
 10. `admin_lang`: читается в `run_bot.get_admin_lang()` из `users.lang_code` админа и передаётся в конструктор; определяет только подписи кнопок (`INBOX_LABELS`) и тост в `handlers/inbox.py`.
 

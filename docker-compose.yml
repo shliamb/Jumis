@@ -1,70 +1,93 @@
-#version: '3.8'
+name: jumis
+
+# Запуск: docker compose up -d --build
+# Остановка: docker compose down        (НЕ с -v: -v удалит базу)
+#
+# Сеть — host: контейнер живёт в сети хоста, поэтому VPN (Amnezia, TUN)
+# работает для Telegram и LLM так же, как для обычного процесса.
+# База доступна по 127.0.0.1:15433 (порт публикует сервис postgres).
 
 services:
 
   postgres:
-    image: pgvector/pgvector:pg17  # или pg16/pg15 #postgres:latest  # 18.3
+    image: pgvector/pgvector:pg17
     container_name: jumis_postgres
+    restart: unless-stopped
     environment:
-      POSTGRES_USER: ${USER_DB}
-      POSTGRES_PASSWORD: ${PASSWORD_DB}
-      POSTGRES_DB: ${POSTGRES_DB}
-      TZ: Europe/Moscow
-    # Меняем 5432 хоста на 15433, чтобы не конфликтовать с локальной БД
+      POSTGRES_USER: ${USER_DB:?set USER_DB in .env}
+      POSTGRES_PASSWORD: ${PASSWORD_DB:?set PASSWORD_DB in .env}
+      POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB in .env}
+      TZ: ${TZ:-Europe/Moscow}
     ports:
       - "127.0.0.1:15433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - /etc/localtime:/etc/localtime:ro
-    networks:
-      - db-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
-
-  # bot-jumis:
-  #     build:
-  #       context: .
-  #       dockerfile: Dockerfile.jumis
-  #       network: host # <-- интернет появится при apt-get даже с VPN
-  #     container_name: bot_jumis
-  #     env_file:
-  #       - .env
-  #     environment:
-  #       TZ: Europe/Moscow
-  #     depends_on:
-  #       - postgres
-  #     network_mode: "host" # <-- Работа контейнера через VPN хоста
-  #     # Переписываем DNS на публичные гугловские/клаудфлейр, а затем запускаем скрипт
-  #     # Проблема DNS-петли
-  #     command: >
-  #       sh -c "echo 'nameserver 8.8.8.8' > /etc/resolv.conf && 
-  #             echo 'nameserver 1.1.1.1' >> /etc/resolv.conf && 
-  #             python jumis/run_bot.py"
-
-  #     # Сюда будут складываться все модели (Kairos, Torch, HF), они останутся на ПК
-  #     volumes:
-  #       - ./models_cache:/root/.cache
-  #       # Монтируем ВСЮ текущую папку проекта в /jumis контейнера, что бы session_jumis.session и models_cache менялся в обоих направлениях
-  #       - .:/jumis
-  #       - /etc/localtime:/etc/localtime:ro
-      
-  #     # Маппинг портов ниже будет проигнорирован докером из-за host-мода.
-  #     # Приложение займет тот порт на ПК, на котором запустится в Python.
-  #     # ports:
-  #     #   - "28080:80"  
-
-  #     # --- ЭТОТ БЛОК ОТКРЫВАЕТ ДОСТУП К ВИДЕОКАРТЕ ---
-  #     deploy:
-  #       resources:
-  #         reservations:
-  #           devices:
-  #             - driver: nvidia
-  #               count: all # или 1, если одна карта
-  #               capabilities: [gpu]
+  bot:
+    build:
+      context: .
+      dockerfile: Dockerfile.jumis
+      network: host          # pip во время сборки идёт через VPN хоста
+      args:
+        UID: ${PUID:-1000}
+        GID: ${PGID:-1000}
+    image: jumis-bot:local
+    container_name: jumis_bot
+    restart: unless-stopped
+    network_mode: host
+    init: true
+    stop_grace_period: 30s   # время на закрытие Telethon и пула БД
+    env_file:
+      - .env
+      - .env.llm
+    environment:
+      IN_DOCKER: "1"
+      TZ: ${TZ:-Europe/Moscow}
+      DB_HOST: 127.0.0.1
+      DB_PORT: "15433"
+      # Файл сессии — состояние, а не код. Один и тот же файл на хосте и в
+      # контейнере: Telethon пишет в /state, изменения сразу видны в ./state.
+      # Копировать туда-обратно нечего — это один файл (один inode).
+      SESSION_PATH: /state/session_jumis.session
+      # Кэши моделей уже лежат в ./models_cache: не качаем их заново.
+      HF_HOME: /jumis/models_cache/huggingface
+      TORCH_HOME: /jumis/models_cache/torch
+      HOME: /home/jumis
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./state:/state
+      # Только файлы логов, а не весь jumis/logs: там лежит ещё и код
+      # (set_logger.py), он должен браться из образа, а не с хоста.
+      - ./jumis/logs/files:/jumis/logs/files
+      - ./jumis/backups:/jumis/backups
+      - ./jumis/json:/jumis/json
+      - ./jumis/downloads:/jumis/downloads
+      - ./models_cache:/jumis/models_cache
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
 
 volumes:
   postgres_data:
     driver: local
-
-networks:
-  db-network:
-    driver: bridge

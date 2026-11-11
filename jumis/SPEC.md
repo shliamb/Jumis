@@ -2,29 +2,32 @@
 
 ## Суть работы
 
-- `run_bot.py` — сборка и запуск всех сервисов в одном asyncio-процессе, создание `Bot` напрямую, подключение модулей `cleaner` (схема дайджестов + системный крон уборки), `pgbackup` (ночной pg_dump + системный крон бэкапа), `rss` (мировые новости: фиды в БД, сводки со сносками; системного крона нет — сбор только по просьбе), `memory` (разделы промпта, карта архива, подхват, ночная склейка дублей) и `telethoner` (userbot + машина входа в Telegram + уведомления о состоянии сессии).
-- `config.py` — единственное место, где определяется путь к файлу сессии (`PATH_SESSION`, абсолютный, переопределяется `SESSION_PATH`), а также безопасный разбор `.env` (отсутствие ключа не роняет процесс).
-- `create_session.py` — резервный вход из терминала на тот же `PATH_SESSION`.
+- `run_bot.py` — сборка и запуск всех сервисов в одном asyncio-процессе, создание `Bot` напрямую, подключение модулей `cleaner` (схема дайджестов + системный крон уборки), `pgbackup` (ночной pg_dump + системный крон бэкапа), `rss` (мировые новости: фиды в БД, сводки со сносками; системного крона нет — сбор только по просьбе), `memory` (разделы промпта, карта архива, подхват, ночная склейка дублей) и `telethoner` (userbot + машина входа в Telegram + уведомления о состоянии сессии). `SIGTERM` от `docker stop` превращается в `KeyboardInterrupt`, поэтому shutdown-блок отрабатывает и в контейнере.
+- `config.py` — единственное место настроек: путь к файлу сессии (`PATH_SESSION`, абсолютный, по умолчанию `<корень>/state/session_jumis.session`, переопределяется `SESSION_PATH`), признак контейнера `DOCKER` (из `IN_DOCKER`), адрес БД (`HOST`/`PORT` из `DB_HOST`/`DB_PORT`), контейнерные пути логов/бэкапов/JSON и безопасный разбор `.env` (отсутствие ключа не роняет процесс).
+- `create_session.py` — резервный вход из терминала на тот же `PATH_SESSION` (только при остановленном боте).
+- `docker-compose.yml` + `Dockerfile.jumis` + `.dockerignore` — запуск бота и базы контейнерами: host-сеть (VPN хоста), GPU, каталог `state/` смонтирован (файл сессии один на хосте и в контейнере), данные — томами `./jumis/logs`, `./jumis/backups`, `./jumis/json`, `./jumis/downloads`, `./models_cache`.
+
+- `install.sh` — идемпотентная установка с нуля: проверка docker/compose/NVIDIA, создание `.env`/`.env.llm` из примеров и интерактивное заполнение (Enter — оставить текущее или пропустить пустое; без TTY вопросы пропускаются), генерация пароля БД, перенос старой сессии в `state/`, пересборка образа только при изменениях кода, `docker compose up -d` и ожидание готовности базы и бота.
 
 ## Входные данные
 
-- `.env`: `telegram_bot_token`, `admin_id`, `api_id`, `api_hash`, `USER_DB`, `PASSWORD_DB`, `POSTGRES_DB`, `LOG_LEVEL`.
-- Переменные окружения/константы в `config.py`: `DOCKER`, `TIME_ZONE`, `HISTORY_LIMIT`, `LLM_TIMEOUT`, `LLM_TEMPERATURE`, `USE_RICH_MESSAGES`, `BUFFER_IDLE_SEC`, `PATH_SESSION`, `TELETHON_CATCH_UP`; логирование: `LOG_LEVEL`, `LOG_TO_CONSOLE`, `LOG_MAX_SIZE_MB`, `LOG_BACKUP_COUNT`.
-- `SESSION_PATH` (окружение) — куда смонтирован файл сессии в Docker; пусто/нет — `<корень>/session_jumis.session`.
-- Запуск: `python jumis/run_bot.py` из корня проекта; Python добавляет каталог `jumis/` в `sys.path`, поэтому плоские импорты (`from config import ...`) работают.
+- `.env`: `telegram_bot_token`, `admin_id`, `api_id`, `api_hash`, `USER_DB`, `PASSWORD_DB`, `POSTGRES_DB`, `LOG_LEVEL`; необязательные `TZ`, `PUID`/`PGID` (см. `docker-compose.yml`).
+- Переменные окружения/константы в `config.py`: `IN_DOCKER` → `DOCKER` (запуск в контейнере), `DB_HOST`/`DB_PORT` → `HOST`/`PORT` (по умолчанию `localhost:15433`; в compose — `127.0.0.1:15433`, порт публикует сервис postgres), `TIME_ZONE`, `HISTORY_LIMIT`, `LLM_TIMEOUT`, `LLM_TEMPERATURE`, `USE_RICH_MESSAGES`, `BUFFER_IDLE_SEC`, `PATH_SESSION`, `TELETHON_CATCH_UP`; логирование: `LOG_LEVEL`, `LOG_TO_CONSOLE`, `LOG_MAX_SIZE_MB`, `LOG_BACKUP_COUNT`.
+- `SESSION_PATH` (окружение) — путь к файлу сессии; в compose `/state/session_jumis.session` (том `./state:/state`); пусто/нет — `<корень>/state/session_jumis.session`.
+- Запуск: `python jumis/run_bot.py` из корня проекта или `docker compose up -d --build`; Python добавляет каталог `jumis/` в `sys.path`, поэтому плоские импорты (`from config import ...`) работают.
 - `create_session.py` интерактивно запрашивает телефон и код Telegram (резервный путь при живом боте не запускать).
+
+- `install.sh` читает и дополняет `.env`/`.env.llm` (только пустые значения), проверяет состояние `state/`, наличие/актуальность образа и поднимает `docker compose`; базу и тома не трогает.
 
 ## Выходные данные
 
 - Работающий процесс с корутинами: `dp.start_polling`, `mytelethon.run`, `ingestion_worker.run`, `jumis_agent.run_queue_worker`, `scheduler.run`.
-- Заполненный `Dispatcher` (`dp`) сервисами: `db_users`, `llm`, `json_back`, `jumis_agent`, `cleaner`, `backups`, `mytelethon`, `userbot_notifier`.
+- Заполненный `Dispatcher` (`dp`) сервисами: `db_users`, `llm`, `json_back`, `jumis_agent`, `cleaner`, `backups`, `rss`, `memory`, `mytelethon`, `userbot_notifier`.
 - Таблица `chat_digests` и индекс `idx_messages_embedding` (создаются `database.create_tables.ensure_schema()`, вызывается через `cleaner.ensure_schema()`), две строки системных кронов в `scheduled_tasks` (уборка 03:30, бэкап 04:30) и папка `jumis/backups` (создаётся первым дампом).
+- Таблицы `rss_feeds` и `rss_digests` (модуль `rss`) создаются тем же `ensure_schema(db)`; при пустой таблице фидов заводится стартовый набор из 10 источников.
 - Файл сессии Telethon по `config.PATH_SESSION` (абсолютный путь, ровно один) и пул asyncpg-соединений.
 - Единый лог `jumis/logs/files/jumis.log` (+ консоль) через `logs.set_logger.logger`.
 - Уведомления владельцу о состоянии userbot: одно сообщение на смену состояния и напоминание раз в сутки, пока сессия не подключена.
-
-- Заполненный `Dispatcher` (`dp`) сервисами: `db_users`, `llm`, `json_back`, `jumis_agent`, `cleaner`, `backups`, `rss`, `memory`, `mytelethon`, `userbot_notifier`.
-- Таблицы `rss_feeds` и `rss_digests` (модуль `rss`) создаются тем же `ensure_schema(db)`; при пустой таблице фидов заводится стартовый набор из 10 источников.
 
 ## Логика (Вариации)
 
@@ -44,17 +47,14 @@
 
 - `rss` после `backups`: `DBRss()` + `RssNews(db_rss, llm)` → `llm.rss`, `dp["rss"]`, `await rss.ensure_seeded()` (идемпотентно: список фидов заводится только при пустой таблице, ошибка сети не валит старт). Системного крона у модуля нет — сводка собирается по просьбе владельца, кнопкой или инструментом.
 
+11. Контейнер (`IN_DOCKER=1`): `DOCKER=True` переключает пути на `/jumis/logs`, `/jumis/backups`, `/jumis/json`, `/jumis/downloads` — они совпадают с томами compose, поэтому логи, бэкапы и JSON остаются на хосте в `./jumis/...`, модели берутся из `./models_cache` (`HF_HOME`, `TORCH_HOME`), файл сессии — из `./state` (том `/state`). `/reset` в контейнере делает `sys.exit(0)`, процесс поднимает `restart: unless-stopped`.
+12. `SIGTERM` (`docker stop`) обрабатывается в `__main__` и превращается в `KeyboardInterrupt`: `asyncio.run` отменяет главную задачу, `finally` закрывает Telethon, сессию бота, пул БД и планировщик; `stop_grace_period: 30s` даёт на это время.
+13. Порядок остановки контейнера: Docker шлёт `SIGTERM` процессу Python (PID 1 — `init: true`), тот идёт тем же путём, что Ctrl+C; при 30 с без завершения Docker добивает контейнер, но сессия и пул уже закрыты штатно.
+
 ## Обработка ошибок
 
-- `.env` без `admin_id`/`api_id`/`api_hash` больше не роняет импорт: `config._env_int` отдаёт `None`/`0`, бот поднимается и сообщает владельцу, чего не хватает (`not_configured` в состоянии userbot). Невалидный `telegram_bot_token` по-прежнему падает на создании `Bot`.
-- `bot.me()` внутри `start_polling` выполняется до внутреннего retry-цикла aiogram: при холодном старте без интернета первый запуск упадёт, защитный цикл перезапустит сервисы через 5 с (сам `Bot` не пересоздаётся).
-- Ошибки внутри корутин: `asyncio.gather` пробрасывает первую, остальные задачи отменяются и ожидаются, затем набор перезапускается; сбой пишется в лог с traceback (`logger.exception`).
-- `CancelledError` (Ctrl+C / остановка) гасит сервисы и пробрасывается; `finally` закрывает ресурсы.
-- `db_memory.init()`/`db_users.init()` обёрнуты в `try/except` — при пустой БД пишется warning, приложение продолжает старт.
-- Повторный вызов `main_bot` не предусмотрен: роутеры и планировщик создаются один раз.
-- `cleaner.ensure_schema()`/`ensure_system_task()` и `backups.ensure_system_task()` при сбое пишут error в лог и не останавливают старт (уборка или бэкап просто не сработают).
-- Ночной бэкап без docker/контейнера — error в лог, дамп не создаётся, файлы не мусорятся (`.part` удаляется).
+- Ночной бэкап без нужной утилиты (в контейнере `pg_dump` 17, на хосте `docker`) — error в лог, дамп не создаётся, файлы не мусорятся (`.part` удаляется).
 - Сбой памяти (блоки промпта, подхват, ночная уборка) не валит старт и не ломает ответы: ошибка пишется в лог, соответствующий шаг пропускается.
 - Сбой userbot (нет сессии, отозванный ключ, нет сети) не валит бота: `mytelethon.run` живёт своим циклом и сообщает состояние; ошибка уведомления логируется и на работу сервисов не влияет.
 - Файл сессии занят вторым процессом → состояние `locked` и предупреждение владельцу вместо бесконечного переподключения.
-- В Docker путь к сессии задаётся `SESSION_PATH`; если на хосте файла нет, bind-mount может создать каталог — проверять до запуска (см. [SPEC telethoner](telethoner/SPEC.md), раздел про Docker).
+- В Docker путь к сессии задаётся `SESSION_PATH`; монтируется **каталог** `./state` (bind-mount несуществующего файла Docker заменил бы каталогом). Контейнер и локальный запуск одновременно нельзя — у файла сессии один писатель.

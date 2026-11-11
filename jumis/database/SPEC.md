@@ -14,7 +14,7 @@
 
 ## Входные данные
 
-- Подключение: `HOST`, `PORT` (15433 локально / 5432 в Docker), `USER_DB`, `PASSWORD_DB`, `DB_NAME`, `TIME_ZONE` (server timezone).
+- Подключение: `HOST`, `PORT` (`DB_HOST`/`DB_PORT` из окружения; локально по умолчанию `localhost:15433`, в контейнере с host-сетью — `127.0.0.1:15433`, порт публикует сервис postgres), `USER_DB`, `PASSWORD_DB`, `DB_NAME`, `TIME_ZONE` (server timezone).
 - SQL-запросы и параметры (asyncpg `$1...$N`), в т.ч. векторы в виде строки `'[...]'` с кастом `::vector`.
 - Данные для вставки: dict с колонками таблиц (`users`, `messages`, `memories`, `scheduled_tasks`, `*_categories`).
 - Таблицы: `users_categories`, `users`, `messages`, `facts_categories`, `memories`, `llm_logs`, `scheduled_tasks`, `chat_digests`.

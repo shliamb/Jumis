@@ -2,11 +2,12 @@
 """
 Логический бэкап базы в файл: pg_dump + ротация копий.
 
-Почему через `docker exec`, а не локальный pg_dump:
-  база живёт в контейнере pgvector/pg17, а на хосте pg_dump версии 14 — он
-  отказывается дампить сервер новее себя. Внутри контейнера лежит ровно та
-  версия, что и сервер, поэтому `docker exec jumis_postgres pg_dump ...`
-  всегда совпадает по версии и не требует пароля (unix-сокет, trust).
+Как запускается pg_dump:
+  * на хосте — `docker exec jumis_postgres pg_dump ...`: база живёт в контейнере
+    pgvector/pg17, а на хосте клиент 14 и он отказывается дампить сервер новее
+    себя; внутри контейнера версия совпадает и пароль не нужен (unix-сокет);
+  * в контейнере (`IN_DOCKER=1`) — локальный `pg_dump` 17 из образа по сети на
+    `DB_HOST:DB_PORT` с `PGPASSWORD`: docker CLI и docker.sock боту не нужны.
 
 Формат `-Fc` (custom): сжатый, цельный файл, восстанавливается `pg_restore`.
 Проверка результата не на веру: файл пишется во временное имя, проверяется
@@ -14,11 +15,12 @@
 Старые копии удаляются ТОЛЬКО после успешного нового дампа.
 """
 import asyncio
+import os
 import time
 from datetime import datetime
 from pathlib import Path
 
-from config import DB_NAME, PATH_BACKUPS, USER_DB
+from config import DB_NAME, DOCKER, HOST, PASSWORD_DB, PATH_BACKUPS, PORT, USER_DB
 from logs.set_logger import logger
 from utils.common import get_now_datetime
 
@@ -93,7 +95,16 @@ class DBRunner:
 
     # ------------------------------------------------------------------- дамп
     def _command(self) -> list[str]:
-        """pg_dump внутри контейнера: та же версия, что у сервера, без пароля."""
+        """Команда pg_dump: локально в контейнере, `docker exec` на хосте."""
+        if DOCKER:
+            return [
+                "pg_dump",
+                "-h", str(HOST),
+                "-p", str(PORT),
+                "-U", str(self.db_user),
+                "-d", str(self.db_name),
+                "-Fc",
+            ]
         return [
             "docker", "exec", self.container,
             "pg_dump",
@@ -117,12 +128,19 @@ class DBRunner:
         cmd = self._command()
         logger.info("[Backup] Запуск: %s -> %s", " ".join(cmd), path.name)
 
+        # Пароль только для локального pg_dump в контейнере: libpq читает
+        # PGPASSWORD из окружения, в лог и командную строку он не попадает.
+        env = None
+        if DOCKER:
+            env = {**os.environ, "PGPASSWORD": str(PASSWORD_DB or "")}
+
         try:
             with open(path, "wb") as out:
                 proc = await asyncio.create_subprocess_exec(
                     *cmd,
                     stdout=out,
                     stderr=asyncio.subprocess.PIPE,
+                    env=env,
                 )
                 try:
                     # stderr забирает communicate(): из wait() его не достать
@@ -132,7 +150,8 @@ class DBRunner:
                     await proc.communicate()
                     raise BackupError(f"pg_dump не ответил за {self.timeout} с")
         except FileNotFoundError:
-            raise BackupError("не найден docker — бэкап невозможен (см. SPEC.md)")
+            tool = "pg_dump" if DOCKER else "docker"
+            raise BackupError(f"не найден {tool} — бэкап невозможен (см. SPEC.md)")
         except BackupError:
             raise
         except Exception as e:

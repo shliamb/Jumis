@@ -6,6 +6,21 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+def _env_int(name: str):
+    """int из окружения без падения на старте: нет значения или мусор → None.
+
+    Раньше `int(os.environ.get(...))` ронял импорт config.py, то есть бот не
+    поднимался вообще и сказать владельцу «в .env нет api_id» было некому.
+    """
+    raw = os.environ.get(name)
+    if raw is None or not str(raw).strip():
+        return None
+    try:
+        return int(str(raw).strip())
+    except (TypeError, ValueError):
+        return None
+
+
 # =====================================================================
 # TIMEZONE & TIME MANAGEMENT ARCHITECTURE / АРХИТЕКТУРА ВРЕМЕНИ
 # =====================================================================
@@ -30,9 +45,15 @@ load_dotenv()
 
 #### BASIC CONFIG (set it up manually): ####
 
-DOCKER = False
-HOST = "127.0.0.1" if DOCKER else  "localhost" # app_postgres localhost
-PORT = 5432 if DOCKER else 15433  # В докере стучимся на внешний порт, локально — на стандартный
+# Признак запуска внутри контейнера: docker-compose.yml выставляет IN_DOCKER=1.
+# От него зависят пути к логам/бэкапам/JSON и поведение /reset (sys.exit вместо
+# os.execv — процесс поднимает restart-политика Docker).
+DOCKER = (os.environ.get("IN_DOCKER") or "").strip() == "1"
+
+# Куда стучимся за PostgreSQL. Переопределяется из окружения: в контейнере
+# сеть host и база доступна на 127.0.0.1:15433 (внешний порт сервиса postgres).
+HOST = (os.environ.get("DB_HOST") or "").strip() or ("127.0.0.1" if DOCKER else "localhost")
+PORT = _env_int("DB_PORT") or (5432 if DOCKER else 15433)
 MAX_SIZE_DOC = 2 # 2 мегабайт
 TIME_ZONE = 'Europe/Moscow' # +03:00
 
@@ -51,14 +72,20 @@ LOG_BACKUP_COUNT = 5
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PATH_LOGS = "/jumis/logs/files" if DOCKER else os.path.join(BASE_DIR, "jumis", "logs", "files")
 
-# Путь к сессии Telethon — ТОЛЬКО абсолютный, один на всю систему.
-# Раньше был относительный 'session_jumis', и файл создавался в текущей папке:
-# от корня — один, из jumis/ — другой. Отсюда две копии и риск тихо войти не той
-# сессией. Переопределяется `SESSION_PATH` из окружения (нужно в Docker, где
-# сессию монтируют отдельным томом и забирают обратно при остановке).
+# Каталог состояния: единственный файл сессии Telethon.
+# Путь одинаковый для локального запуска и для контейнера: в compose каталог
+# `./state` монтируется в `/state`, поэтому файл физически один — что записано
+# в контейнере, сразу лежит на хосте. Копировать туда-обратно нечего.
+# Переопределяется `SESSION_PATH` (нужно, если каталог смонтирован в другое место).
+STATE_DIR = os.path.join(BASE_DIR, "state")
 PATH_SESSION = (os.environ.get("SESSION_PATH") or "").strip() or os.path.join(
-    BASE_DIR, "session_jumis.session"
+    STATE_DIR, "session_jumis.session"
 )
+try:
+    os.makedirs(os.path.dirname(PATH_SESSION), exist_ok=True)
+except OSError:
+    # Каталог недоступен (read-only окружение): Telethon скажет об этом сам.
+    pass
 
 # Догонять ли сообщения, пропущенные пока бот был выключен (catch_up в Telethon).
 # По умолчанию выключено: Telethon заново отдаёт старые апдейты, а дайджест их
@@ -98,21 +125,7 @@ USE_RICH_MESSAGES = True
 
 # `.env` уже прочитан в начале файла (см. load_dotenv() выше): от него зависит
 # и PATH_SESSION. Здесь только разбор значений.
-
-
-def _env_int(name: str):
-    """int из окружения без падения на старте: нет значения или мусор → None.
-
-    Раньше `int(os.environ.get(...))` ронял импорт config.py, то есть бот не
-    поднимался вообще и сказать владельцу «в .env нет api_id» было некому.
-    """
-    raw = os.environ.get(name)
-    if raw is None or not str(raw).strip():
-        return None
-    try:
-        return int(str(raw).strip())
-    except (TypeError, ValueError):
-        return None
+# `_env_int` определён в начале файла: им же читается DB_PORT.
 
 
 # LOGGING (после load_dotenv, чтобы можно было переопределить из .env):

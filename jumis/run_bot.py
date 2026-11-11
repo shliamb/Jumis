@@ -1,5 +1,6 @@
 # ! jumi/run_bot.py
 import asyncio
+import signal
 # from datetime import datetime
 # import json
 from aiogram import Bot, Router
@@ -337,7 +338,19 @@ async def main_bot() -> None:
         logger.info("=== Jumis stopped ===")
 
 
+def _sigterm_handler(signum, frame):
+    """`docker stop` шлёт SIGTERM: превращаем его в KeyboardInterrupt.
+
+    Без обработчика Python умирает сразу по умолчанию и `finally` в main_bot
+    не выполняется: Telethon не disconnect-ится, пул БД не закрывается. С
+    исключением asyncio.run отменяет главную задачу, а shutdown-блок
+    отрабатывает как при Ctrl+C.
+    """
+    raise KeyboardInterrupt
+
+
 if __name__ == "__main__":
+    signal.signal(signal.SIGTERM, _sigterm_handler)
     try:
         asyncio.run(main_bot())
     except KeyboardInterrupt:
